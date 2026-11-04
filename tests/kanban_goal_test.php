@@ -49,6 +49,8 @@ check(str_contains($goal['notes'], 'Life → To Do') && str_contains($goal['note
 check(cards() === ['c2', 'c3'], 'card removed from the board');
 check(isset($result['updates']['kanban_boards_v1'], $result['updates'][GOALS_KEY]), 'both documents returned to the client');
 check($result['updates'][GOALS_KEY]['revision'] === hash('sha256', $store->raw(GOALS_KEY)), 'returned revision matches the stored goals');
+$todosAfterMove = $store->get(TODOS_KEY, ['tasks' => []])['tasks'];
+check(count($todosAfterMove) === 1 && $todosAfterMove[0]['goalId'] === $goal['id'] && $todosAfterMove[0]['title'] === 'Run a half marathon', 'moving Kanban card to Goal also creates linked Todo');
 
 // Legacy flat checklists work, and an impossible date is dropped instead of failing the move.
 move('c2');

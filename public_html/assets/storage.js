@@ -35,6 +35,10 @@
     }
     if (keys.includes(data?.key) && typeof data.value === 'string') {
       cache.set(data.key, data.value);
+      if (typeof data.revision === 'string' && /^[a-f0-9]{64}$/.test(data.revision)) {
+        revisions.set(data.key, data.revision);
+      }
+      edits.set(data.key, (edits.get(data.key) || 0) + 1);
       dispatchEvent(new Event('app-storage-change'));
     }
   };
@@ -63,6 +67,7 @@
     if (!response.ok || !result.ok) throw new Error(`MySQL save failed (${response.status})`);
     revisions.set(key, result.revision);
     failedWrites.delete(key);
+    channel?.postMessage({key, value, revision: result.revision});
   }
 
   window.appStorage = {
@@ -93,7 +98,7 @@
         cache.set(key, result.value);
         revisions.set(key, result.revision);
         edits.set(key, (edits.get(key) || 0) + 1);
-        channel?.postMessage({key, value:result.value});
+        channel?.postMessage({key, value:result.value, revision:result.revision});
         dispatchEvent(new Event('app-storage-change'));
         return result.value;
       });

@@ -348,7 +348,7 @@ async function moveCardToGoal(event) {
   setGoalCardBusy(true);
   $('goalCardError').hidden = true;
   try {
-    const data = await appStorage.mutateItems([KEY, 'edi_goals_v1'], async ({csrf, revisions}) => {
+    const data = await appStorage.mutateItems([KEY, 'edi_goals_v1', 'edi_todos_v1'], async ({csrf, revisions}) => {
       const response = await fetch('/kanban.php', {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
         headers: {'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': csrf},

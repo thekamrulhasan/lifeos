@@ -49,7 +49,7 @@ function tasks_validate(array $body, bool $create): array
 function tasks_api(StateStore $store, string $method, ?string $id, bool $complete, array $body, array $query): array
 {
     api_method($complete ? ['POST'] : ($id === null ? ['GET', 'POST'] : ['GET', 'PATCH', 'DELETE']), $method);
-    $defaults = [GOALS_KEY => ['goals' => []], KANBAN_KEY => ['boards' => [], 'activeBoardId' => null]];
+    $defaults = [GOALS_KEY => ['goals' => []], KANBAN_KEY => ['boards' => [], 'activeBoardId' => null], TODOS_KEY => goals_default_todos_doc()];
     if ($method === 'GET') {
         $tasks = array_values(array_filter(tasks_aggregate($store->get(GOALS_KEY, $defaults[GOALS_KEY]), $store->get(KANBAN_KEY, $defaults[KANBAN_KEY])), fn ($task) => ($id === null || $task['id'] === $id) && tasks_matches($task, $query)));
         if ($id === null) return $tasks;
@@ -68,6 +68,7 @@ function tasks_api(StateStore $store, string $method, ?string $id, bool $complet
                     if (array_key_exists('due_date', $body)) $new['dueDate'] = $body['due_date'];
                     if (isset($body['priority'])) $new['priority'] = $body['priority'];
                     $goal['tasks'][] = $new; $goal['updatedAt'] = api_now();
+                    goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
                     return ['id' => $new['id'], 'source' => 'goal', 'goal_id' => $goal['id'], 'title' => $new['title'], 'done' => $new['done'], 'due_date' => $new['dueDate'] ?? $goal['deadline'] ?? null, 'priority' => $new['priority'] ?? $goal['priority'] ?? 'medium'];
                 }
                 throw new ApiException(404, 'not_found', 'Goal not found.');
@@ -93,8 +94,13 @@ function tasks_api(StateStore $store, string $method, ?string $id, bool $complet
             foreach ($docs[GOALS_KEY]['goals'] as &$goal) if ((string) $goal['id'] === $found['goal_id']) {
                 foreach ($goal['tasks'] as $index => &$task) if ((string) $task['id'] === $id) {
                     $goal['updatedAt'] = api_now();
-                    if ($method === 'DELETE') { array_splice($goal['tasks'], $index, 1); return ['deleted' => true]; }
+                    if ($method === 'DELETE') {
+                        array_splice($goal['tasks'], $index, 1);
+                        goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
+                        return ['deleted' => true];
+                    }
                     foreach ($body as $field => $value) $task[$field === 'due_date' ? 'dueDate' : $field] = $value;
+                    goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
                     break;
                 }
                 break;

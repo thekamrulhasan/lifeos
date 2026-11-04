@@ -1,4 +1,5 @@
 const KEY = 'edi_todos_v1';
+const GOALS_KEY = 'edi_goals_v1';
 const $ = id => document.getElementById(id);
 const escapeHtml = globalThis.lifeOsHtml.escapeHtml;
 
@@ -8,6 +9,7 @@ const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1Z"/>',
   today: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   upcoming: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 11h18"/>',
+  goals: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="m15 9 5-5m0 0v4m0-4h-4"/>',
   all: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1 1 2-2M3.5 12l1 1 2-2M3.5 18l1 1 2-2"/>',
   done: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 11h18"/>',
@@ -20,6 +22,7 @@ const VIEWS = [
   {id: 'inbox', name: 'Inbox', hint: 'Tasks that are not in a list yet.'},
   {id: 'today', name: 'Today', hint: 'Due today, plus anything overdue.'},
   {id: 'upcoming', name: 'Upcoming', hint: 'Everything with a due date, soonest first.'},
+  {id: 'goals', name: 'SMART Goals', hint: 'Actionable todos automatically synced with your SMART goals.'},
   {id: 'all', name: 'All tasks', hint: 'Every open task across your lists.'},
   {id: 'done', name: 'Completed', hint: 'Finished tasks, most recent first.'}
 ];
@@ -38,6 +41,17 @@ function dueLabel(due) {
 }
 const dueState = task => !task.due || task.done ? '' : task.due < dayKey() ? 'overdue' : task.due === dayKey() ? 'today' : '';
 
+const toEpoch = (val, fallback = Date.now()) => {
+  if (typeof val === 'number' && Number.isFinite(val) && val > 0) return val;
+  if (typeof val === 'string' && val.trim()) {
+    const asNum = Number(val);
+    if (Number.isFinite(asNum) && asNum > 0) return asNum;
+    const parsed = Date.parse(val);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+};
+
 function normalize(saved) {
   const data = saved && typeof saved === 'object' ? saved : {};
   const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -45,6 +59,9 @@ function normalize(saved) {
     .map((list, index) => ({id: list.id, name: text(list.name, 60) || 'Untitled list', color: LIST_COLORS.includes(list.color) ? list.color : LIST_COLORS[index % LIST_COLORS.length]}));
   const tasks = (Array.isArray(data.tasks) ? data.tasks : []).filter(task => task && typeof task.id === 'string').map(task => ({
     id: task.id,
+    goalId: typeof task.goalId === 'string' && task.goalId.trim() ? task.goalId.trim() : null,
+    goalCategory: text(task.goalCategory, 60),
+    goalProgressSource: text(task.goalProgressSource, 30) || 'checklist',
     title: text(task.title, 300),
     notes: text(task.notes, 20000),
     due: /^\d{4}-\d{2}-\d{2}$/.test(task.due || '') ? task.due : '',
@@ -52,9 +69,9 @@ function normalize(saved) {
     listId: lists.some(list => list.id === task.listId) ? task.listId : null,
     done: task.done === true,
     subtasks: (Array.isArray(task.subtasks) ? task.subtasks : []).filter(sub => sub && typeof sub.id === 'string').map(sub => ({id: sub.id, title: text(sub.title, 300), done: sub.done === true})),
-    createdAt: Number(task.createdAt) || Date.now(),
-    updatedAt: Number(task.updatedAt) || Date.now(),
-    completedAt: Number(task.completedAt) || null
+    createdAt: toEpoch(task.createdAt, Date.now()),
+    updatedAt: toEpoch(task.updatedAt, Date.now()),
+    completedAt: task.completedAt ? toEpoch(task.completedAt, null) : null
   }));
   const views = [...VIEWS.map(view => view.id), ...lists.map(list => list.id)];
   return {tasks, lists, view: views.includes(data.view) ? data.view : 'inbox', sort: ['smart', 'due', 'priority', 'created', 'title'].includes(data.sort) ? data.sort : 'smart'};
@@ -93,6 +110,180 @@ document.addEventListener('DOMContentLoaded', async () => {
     toastTimer = setTimeout(() => box.classList.remove('show'), action ? 6000 : 2600);
   }
 
+  let isSyncingGoals = false;
+  let lastGoalsRaw = appStorage.getItem(GOALS_KEY);
+
+  function buildGoalTodoNotes(goal) {
+    const parts = [];
+    if (goal.specific?.trim()) parts.push(goal.specific.trim());
+    if (goal.relevant?.trim()) parts.push(`Why: ${goal.relevant.trim()}`);
+    if (goal.notes?.trim()) parts.push(goal.notes.trim());
+    return parts.join('\n\n').slice(0, 20000);
+  }
+
+  function isGoalCompleted(goal, subtasks) {
+    if (goal.progressSource === 'measure') {
+      const measures = (Array.isArray(goal.measures) ? goal.measures : []).filter(m => (m?.target ?? 0) > 0);
+      if (!measures.length) return false;
+      const sum = measures.reduce((acc, m) => acc + Math.max(0, Math.min(100, ((m.current ?? 0) / m.target) * 100)), 0);
+      return Math.round(sum / measures.length) === 100;
+    }
+    return subtasks.length > 0 && subtasks.every(s => s.done);
+  }
+
+  function syncFromGoals({ notify = false } = {}) {
+    if (isSyncingGoals) return false;
+    try {
+      const rawGoals = appStorage.getItem(GOALS_KEY);
+      lastGoalsRaw = rawGoals;
+      if (!rawGoals) {
+        if (notify) toast('No SMART goals found to sync');
+        return false;
+      }
+      const parsed = JSON.parse(rawGoals);
+      const goals = Array.isArray(parsed?.goals) ? parsed.goals : [];
+      let changed = false;
+
+      const archivedIds = new Set(goals.filter(g => g?.status === 'archived' && g?.id).map(g => String(g.id)));
+      if (archivedIds.size > 0) {
+        const before = data.tasks.length;
+        data.tasks = data.tasks.filter(t => !t.goalId || !archivedIds.has(String(t.goalId)));
+        if (data.tasks.length !== before) changed = true;
+      }
+
+      let syncedCount = 0;
+      const now = Date.now();
+
+      for (const goal of goals) {
+        if (!goal || goal.status === 'archived' || !goal.id) continue;
+        syncedCount++;
+        const goalId = String(goal.id);
+        const title = String(goal.title || 'Untitled goal').trim().slice(0, 300) || 'Untitled goal';
+        const notes = buildGoalTodoNotes(goal);
+        const due = /^\d{4}-\d{2}-\d{2}$/.test(goal.deadline || '') ? goal.deadline : '';
+        const priority = ['high', 'medium', 'low'].includes(goal.priority) ? goal.priority : 'medium';
+        const goalCategory = String(goal.category || '').slice(0, 60);
+        const goalProgressSource = String(goal.progressSource || 'checklist').slice(0, 30);
+        const subtasks = (Array.isArray(goal.tasks) ? goal.tasks : [])
+          .filter(t => t && String(t.title || '').trim())
+          .map(t => ({
+            id: String(t.id || crypto.randomUUID()),
+            title: String(t.title).trim().slice(0, 300),
+            done: Boolean(t.done)
+          }));
+        const isDone = isGoalCompleted(goal, subtasks);
+
+        const existing = data.tasks.find(t => String(t.goalId || '') === goalId);
+        if (existing) {
+          const prevSubs = JSON.stringify(existing.subtasks.map(s => ({id: s.id, title: s.title, done: s.done})));
+          const nextSubs = JSON.stringify(subtasks);
+          if (
+            existing.title !== title ||
+            existing.notes !== notes ||
+            existing.due !== due ||
+            existing.priority !== priority ||
+            existing.done !== isDone ||
+            existing.goalCategory !== goalCategory ||
+            existing.goalProgressSource !== goalProgressSource ||
+            prevSubs !== nextSubs
+          ) {
+            const wasDone = existing.done;
+            existing.title = title;
+            existing.notes = notes;
+            existing.due = due;
+            existing.priority = priority;
+            existing.done = isDone;
+            existing.goalCategory = goalCategory;
+            existing.goalProgressSource = goalProgressSource;
+            existing.subtasks = subtasks;
+            existing.updatedAt = now;
+            existing.completedAt = isDone ? (wasDone ? existing.completedAt || now : now) : null;
+            changed = true;
+          }
+        } else {
+          const createdAt = toEpoch(goal.createdAt, now);
+          const updatedAt = toEpoch(goal.updatedAt, createdAt);
+          data.tasks.unshift({
+            id: crypto.randomUUID(),
+            goalId,
+            goalCategory,
+            goalProgressSource,
+            title,
+            notes,
+            due,
+            priority,
+            listId: null,
+            done: isDone,
+            subtasks,
+            createdAt,
+            updatedAt,
+            completedAt: isDone ? updatedAt : null
+          });
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        save();
+        render();
+      }
+      if (notify) {
+        toast(`Fetched & synced ${syncedCount} SMART goal${syncedCount === 1 ? '' : 's'}`);
+      }
+      return changed;
+    } catch (e) {
+      console.error('Failed to sync from goals:', e);
+      if (notify) toast('Unable to sync SMART goals');
+      return false;
+    }
+  }
+
+  function syncTodoToGoal(task, { deleteGoal = false } = {}) {
+    if (!task?.goalId) return;
+    try {
+      isSyncingGoals = true;
+      const rawGoals = appStorage.getItem(GOALS_KEY);
+      if (!rawGoals) return;
+      const parsed = JSON.parse(rawGoals);
+      if (!Array.isArray(parsed?.goals)) return;
+      const idx = parsed.goals.findIndex(g => g && String(g.id) === String(task.goalId));
+      if (idx === -1) return;
+
+      if (deleteGoal) {
+        parsed.goals.splice(idx, 1);
+      } else {
+        const goal = parsed.goals[idx];
+        goal.title = (task.title.trim() || 'Untitled goal').slice(0, 200);
+        goal.deadline = task.due || null;
+        if (['high', 'medium', 'low'].includes(task.priority)) {
+          goal.priority = task.priority;
+        }
+        goal.tasks = task.subtasks.map(sub => ({
+          id: sub.id,
+          title: sub.title.slice(0, 500),
+          done: Boolean(sub.done)
+        }));
+        goal.updatedAt = Date.now();
+      }
+      const nextRaw = JSON.stringify(parsed);
+      lastGoalsRaw = nextRaw;
+      appStorage.setItem(GOALS_KEY, nextRaw);
+    } catch (e) {
+      console.error('Failed to sync Todo back to Goal:', e);
+    } finally {
+      isSyncingGoals = false;
+    }
+  }
+
+  function openGoalDetail(goalId) {
+    if (!goalId) return;
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'todo-open-goal', goalId: String(goalId) }, location.origin);
+    } else {
+      location.href = `/goals/?goal=${encodeURIComponent(goalId)}`;
+    }
+  }
+
   const findTask = id => data.tasks.find(task => task.id === id);
   const findList = id => data.lists.find(list => list.id === id);
   const matchesQuery = task => !query || `${task.title}\n${task.notes}\n${task.subtasks.map(sub => sub.title).join('\n')}`.toLocaleLowerCase().includes(query);
@@ -100,6 +291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function inView(task, view) {
     if (view === 'done') return task.done;
     if (task.done) return false;
+    if (view === 'goals') return !!task.goalId;
     if (view === 'inbox') return !task.listId;
     if (view === 'today') return !!task.due && task.due <= dayKey();
     if (view === 'upcoming') return !!task.due;
@@ -107,7 +299,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     return task.listId === view;
   }
   // Completed tasks in a list stay visible under that list's "Completed" section.
-  const doneInList = view => findList(view) || view === 'inbox' ? data.tasks.filter(task => task.done && (view === 'inbox' ? !task.listId : task.listId === view)) : [];
+  const doneInList = view => findList(view) || view === 'inbox' || view === 'goals'
+    ? data.tasks.filter(task => task.done && (view === 'inbox' ? !task.listId : view === 'goals' ? !!task.goalId : task.listId === view))
+    : [];
 
   function sortTasks(tasks) {
     const byDue = (a, b) => (a.due || '9999').localeCompare(b.due || '9999');
@@ -127,6 +321,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const doneSubs = task.subtasks.filter(sub => sub.done).length;
     const due = dueState(task);
     const chips = [
+      task.goalId ? `<span class="chip goal-chip">${icon('goals')}SMART Goal${task.goalCategory ? ' · ' + escapeHtml(task.goalCategory) : ''}</span>` : '',
       task.due ? `<span class="chip ${due}">${icon('calendar')}${escapeHtml(dueLabel(task.due))}</span>` : '',
       task.subtasks.length ? `<span class="chip ${doneSubs === task.subtasks.length ? 'complete' : ''}">${icon('subtasks')}${doneSubs}/${task.subtasks.length}</span>` : '',
       task.priority !== 'none' ? `<span class="chip priority-${task.priority}">${task.priority[0].toUpperCase() + task.priority.slice(1)}</span>` : '',
@@ -214,6 +409,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!keep($('detailTitle'))) $('detailTitle').value = task.title;
     $('detailTitle').classList.toggle('done', task.done);
     $('detailDone').checked = task.done;
+    if ($('detailGoalBanner')) {
+      $('detailGoalBanner').hidden = !task.goalId;
+      if (task.goalId && $('detailGoalCategory')) {
+        $('detailGoalCategory').textContent = task.goalCategory ? `· ${task.goalCategory}` : '';
+      }
+    }
     if (!keep($('detailDue'))) $('detailDue').value = task.due;
     $('detailPriority').value = task.priority;
     renderListOptions();
@@ -235,9 +436,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setDone(task, done) {
     task.done = done;
     task.completedAt = done ? Date.now() : null;
+    if (task.goalId && (task.goalProgressSource || 'checklist') === 'checklist') {
+      if (task.subtasks.length > 0) {
+        task.subtasks.forEach(sub => { sub.done = done; });
+      } else if (done) {
+        task.subtasks.push({ id: crypto.randomUUID(), title: task.title, done: true });
+      }
+    }
     touch(task);
+    syncTodoToGoal(task);
     commit();
-    if (done) toast('Task completed', () => { task.done = false; task.completedAt = null; commit(); });
+    if (done) toast('Task completed', () => {
+      task.done = false;
+      task.completedAt = null;
+      if (task.goalId && (task.goalProgressSource || 'checklist') === 'checklist') {
+        task.subtasks.forEach(sub => { sub.done = false; });
+      }
+      syncTodoToGoal(task);
+      commit();
+    });
   }
   function select(id) {
     selectedId = id;
@@ -329,6 +546,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Detail panel
   const current = () => findTask(selectedId);
   $('closeDetail').onclick = () => select(null);
+  $('syncGoalsBtn')?.addEventListener('click', () => syncFromGoals({ notify: true }));
+  $('openGoalFromDetailBtn')?.addEventListener('click', () => {
+    const task = current();
+    if (task?.goalId) openGoalDetail(task.goalId);
+  });
   $('detailDone').onchange = () => { const task = current(); if (task) setDone(task, $('detailDone').checked); };
   $('detailTitle').addEventListener('input', () => {
     const task = current(); if (!task) return;
@@ -341,10 +563,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('detailTitle').addEventListener('blur', () => {
     const task = current(); if (!task) return;
     task.title = task.title.trim() || 'Untitled task';
+    syncTodoToGoal(task);
     commit();
   });
-  $('detailDue').onchange = () => { const task = current(); if (!task) return; task.due = $('detailDue').value; touch(task); commit(); };
-  $('detailPriority').onchange = () => { const task = current(); if (!task) return; task.priority = $('detailPriority').value; touch(task); commit(); };
+  $('detailDue').onchange = () => { const task = current(); if (!task) return; task.due = $('detailDue').value; touch(task); syncTodoToGoal(task); commit(); };
+  $('detailPriority').onchange = () => { const task = current(); if (!task) return; task.priority = $('detailPriority').value; touch(task); syncTodoToGoal(task); commit(); };
   $('detailList').onchange = () => { const task = current(); if (!task) return; task.listId = $('detailList').value || null; touch(task); commit(); };
   $('detailNotes').addEventListener('input', () => { const task = current(); if (!task) return; task.notes = $('detailNotes').value; touch(task); saveSoon(); });
   $('detailNotes').addEventListener('blur', () => { if (current()) commit(); });
@@ -357,6 +580,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     toast('Task deleted', () => { data.tasks.splice(index, 0, task); selectedId = task.id; commit(); });
   };
 
+  function updateTaskCompletionFromSubtasks(task) {
+    if (task.goalId && (task.goalProgressSource || 'checklist') === 'checklist' && task.subtasks.length > 0) {
+      const allDone = task.subtasks.every(s => s.done);
+      if (task.done !== allDone) {
+        task.done = allDone;
+        task.completedAt = allDone ? Date.now() : null;
+      }
+    }
+    syncTodoToGoal(task);
+  }
+
   // Subtasks
   $('subtaskAdd').onsubmit = event => {
     event.preventDefault();
@@ -365,6 +599,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     task.subtasks.push({id: crypto.randomUUID(), title, done: false});
     $('subtaskTitle').value = '';
     touch(task);
+    updateTaskCompletionFromSubtasks(task);
     renderSubtasks(task);
     commit();
   };
@@ -374,6 +609,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const [task, sub] = subtaskOf(event.target); if (!sub) return;
     sub.done = event.target.checked;
     touch(task);
+    updateTaskCompletionFromSubtasks(task);
     renderSubtasks(task);
     commit();
   });
@@ -392,8 +628,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (event.target.type !== 'text') return;
     const [task, sub] = subtaskOf(event.target); if (!sub) return;
     // An emptied subtask is removed rather than kept blank.
-    if (sub.title.trim()) { sub.title = sub.title.trim(); save(); return; }
+    if (sub.title.trim()) { sub.title = sub.title.trim(); syncTodoToGoal(task); save(); return; }
     task.subtasks = task.subtasks.filter(item => item !== sub);
+    updateTaskCompletionFromSubtasks(task);
     renderSubtasks(task);
     commit();
   });
@@ -402,6 +639,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const [task, sub] = subtaskOf(event.target); if (!sub) return;
     task.subtasks = task.subtasks.filter(item => item !== sub);
     touch(task);
+    updateTaskCompletionFromSubtasks(task);
     renderSubtasks(task);
     commit();
   });
@@ -419,11 +657,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Adopt changes saved from another tab or device.
   addEventListener('app-storage-change', () => {
     const raw = appStorage.getItem(KEY);
-    if (!raw || raw === lastSaved) return;
-    try { data = normalize(JSON.parse(raw)); } catch { return; }
-    lastSaved = raw;
-    if (!findTask(selectedId)) selectedId = null;
-    render();
+    if (raw && raw !== lastSaved) {
+      try { data = normalize(JSON.parse(raw)); } catch { return; }
+      lastSaved = raw;
+      if (!findTask(selectedId)) selectedId = null;
+      render();
+    }
+    const rawGoals = appStorage.getItem(GOALS_KEY);
+    if (rawGoals !== lastGoalsRaw && !isSyncingGoals) {
+      syncFromGoals();
+    }
+  });
+
+  function selectGoalTodo(goalId, todoId = null) {
+    syncFromGoals();
+    const target = (todoId && findTask(todoId)) || data.tasks.find(t => String(t.goalId || '') === String(goalId));
+    if (target) {
+      if (!inView(target, data.view)) {
+        data.view = target.done ? 'done' : 'goals';
+      }
+      select(target.id);
+    }
+  }
+
+  addEventListener('message', event => {
+    if (event.origin !== location.origin || event.source !== parent) return;
+    if (event.data?.type === 'todo-refresh') {
+      appStorage.sync().then(() => {
+        const raw = appStorage.getItem(KEY);
+        if (raw && raw !== lastSaved) {
+          try { data = normalize(JSON.parse(raw)); lastSaved = raw; } catch {}
+        }
+        syncFromGoals();
+        render();
+      }).catch(() => {});
+    } else if (event.data?.type === 'todo-select-goal' && event.data?.goalId) {
+      selectGoalTodo(event.data.goalId, event.data.todoId);
+    }
   });
 
   // Keep "Today" and overdue markers right when the page stays open past midnight.
@@ -431,5 +701,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(() => { if (dayKey() !== renderedDay) { renderedDay = dayKey(); render(); } }, 60000);
 
   addEventListener('resize', () => { if (selectedId) fitTitle(); });
+  syncFromGoals();
   render();
+  const requestedGoal = new URLSearchParams(location.search).get('goal');
+  if (requestedGoal) selectGoalTodo(requestedGoal);
 });

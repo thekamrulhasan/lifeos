@@ -3,7 +3,13 @@ const $ = (id) => document.getElementById(id);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const KEY = "edi_goals_v1";
+const TODOS_KEY = "edi_todos_v1";
 const DRAFTS_KEY = "edi_goals_drafts_v1";
+const DEFAULT_TODO_LISTS = [
+  { id: "work", name: "Work", color: "#38bdf8" },
+  { id: "personal", name: "Personal", color: "#a78bfa" },
+  { id: "errands", name: "Errands", color: "#34d399" },
+];
 const WIZARD_FIELDS = ["gTitle", "gSpecific", "gCategory",
   "gRelevant", "gPriority", "gDeadline", "gStart", "gProgressSource", "gHabit", "gHabitTarget"];
 const SMART_STEPS = ["specific", "measurable", "achievable", "relevant", "timebound"];
@@ -53,12 +59,170 @@ function load() {
   }
 }
 
-function save() {
+let isWritingGoals = false;
+
+function save({ deletedGoalId = null } = {}) {
   try {
+    isWritingGoals = true;
     appStorage.setItem(KEY, JSON.stringify({...JSON.parse(appStorage.getItem(KEY) || "{}"), goals: state.goals }));
+    syncGoalsToTodos({ deletedGoalId });
   } catch (e) {
     console.error("Failed to save goals:", e);
     showToast("Unable to save goals", "error");
+  } finally {
+    isWritingGoals = false;
+  }
+}
+
+function buildTodoNotes(goal) {
+  const parts = [];
+  if (goal.specific?.trim()) parts.push(goal.specific.trim());
+  if (goal.relevant?.trim()) parts.push(`Why: ${goal.relevant.trim()}`);
+  if (goal.notes?.trim()) parts.push(goal.notes.trim());
+  return parts.join("\n\n").slice(0, 20000);
+}
+
+function syncGoalsToTodos({ deletedGoalId = null, notify = false } = {}) {
+  try {
+    let todosDoc = { tasks: [], lists: DEFAULT_TODO_LISTS, view: "inbox", sort: "smart" };
+    const rawTodos = appStorage.getItem(TODOS_KEY);
+    if (rawTodos) {
+      const parsed = JSON.parse(rawTodos);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        todosDoc = {
+          ...parsed,
+          tasks: Array.isArray(parsed.tasks) ? [...parsed.tasks] : [],
+          lists: Array.isArray(parsed.lists) && parsed.lists.length ? parsed.lists : DEFAULT_TODO_LISTS,
+          view: parsed.view || "inbox",
+          sort: parsed.sort || "smart",
+        };
+      }
+    }
+
+    let changed = !rawTodos;
+    const archivedIds = new Set(
+      state.goals.filter((g) => g.status === "archived" && g.id).map((g) => String(g.id))
+    );
+    if (deletedGoalId) archivedIds.add(String(deletedGoalId));
+
+    if (archivedIds.size > 0) {
+      const before = todosDoc.tasks.length;
+      todosDoc.tasks = todosDoc.tasks.filter((t) => !t?.goalId || !archivedIds.has(String(t.goalId)));
+      if (todosDoc.tasks.length !== before) changed = true;
+    }
+
+    const nowISO = new Date().toISOString();
+    let syncedCount = 0;
+
+    for (const goal of state.goals) {
+      if (!goal || goal.status === "archived" || !goal.id) continue;
+      syncedCount++;
+      const goalId = String(goal.id);
+      const isDone = effectiveStatus(goal) === "completed";
+      const title = String(goal.title || "Untitled goal").trim().slice(0, 300) || "Untitled goal";
+      const notes = buildTodoNotes(goal);
+      const due = /^\d{4}-\d{2}-\d{2}$/.test(goal.deadline || "") ? goal.deadline : "";
+      const priority = ["high", "medium", "low"].includes(goal.priority) ? goal.priority : "medium";
+      const goalCategory = String(goal.category || "");
+      const goalProgressSource = String(goal.progressSource || "checklist");
+      const subtasks = (Array.isArray(goal.tasks) ? goal.tasks : [])
+        .filter((t) => t && String(t.title || "").trim())
+        .map((t) => ({
+          id: String(t.id || uid()),
+          title: String(t.title).trim().slice(0, 300),
+          done: Boolean(t.done),
+        }));
+
+      const idx = todosDoc.tasks.findIndex((t) => t && String(t.goalId || "") === goalId);
+      if (idx !== -1) {
+        const cur = todosDoc.tasks[idx];
+        const prevSubs = JSON.stringify(
+          (Array.isArray(cur.subtasks) ? cur.subtasks : []).map((s) => ({
+            id: String(s.id),
+            title: String(s.title),
+            done: Boolean(s.done),
+          }))
+        );
+        const nextSubs = JSON.stringify(subtasks);
+        if (
+          cur.title !== title ||
+          (cur.notes || "") !== notes ||
+          (cur.due || "") !== due ||
+          (cur.priority || "medium") !== priority ||
+          Boolean(cur.done) !== isDone ||
+          (cur.goalCategory || "") !== goalCategory ||
+          (cur.goalProgressSource || "checklist") !== goalProgressSource ||
+          prevSubs !== nextSubs
+        ) {
+          const wasDone = Boolean(cur.done);
+          todosDoc.tasks[idx] = {
+            ...cur,
+            goalId,
+            goalCategory,
+            goalProgressSource,
+            title,
+            notes,
+            due,
+            priority,
+            done: isDone,
+            subtasks,
+            updatedAt: nowISO,
+            completedAt: isDone ? (wasDone ? cur.completedAt || nowISO : nowISO) : null,
+          };
+          changed = true;
+        }
+      } else {
+        const createdAt =
+          typeof goal.createdAt === "string"
+            ? goal.createdAt
+            : typeof goal.createdAt === "number"
+            ? new Date(goal.createdAt).toISOString()
+            : nowISO;
+        todosDoc.tasks.unshift({
+          id: uid(),
+          goalId,
+          goalCategory,
+          goalProgressSource,
+          title,
+          notes,
+          due,
+          priority,
+          listId: null,
+          done: isDone,
+          subtasks,
+          createdAt,
+          updatedAt: nowISO,
+          completedAt: isDone ? nowISO : null,
+        });
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      appStorage.setItem(TODOS_KEY, JSON.stringify(todosDoc));
+    }
+    if (notify) {
+      showToast(`Synced ${syncedCount} SMART goal${syncedCount === 1 ? "" : "s"} with Todo`, "success");
+    }
+    return todosDoc;
+  } catch (e) {
+    console.error("Failed to sync goals with Todo:", e);
+    if (notify) showToast("Unable to sync with Todo", "error");
+    return null;
+  }
+}
+
+function openGoalInTodo(goalId) {
+  if (!goalId) return;
+  const todosDoc = syncGoalsToTodos() || {};
+  const todo = (todosDoc.tasks || []).find((t) => t && String(t.goalId || "") === String(goalId));
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      { type: "goals-open-todo", goalId: String(goalId), todoId: todo?.id || null },
+      location.origin
+    );
+  } else {
+    location.href = `/todo/?goal=${encodeURIComponent(goalId)}`;
   }
 }
 
@@ -288,7 +452,10 @@ function goalCardHTML(g, index = 0) {
       <div class="progress-track" role="progressbar" aria-label="Goal progress" aria-valuemin="0" aria-valuemax="100" ${progress===null ? 'aria-valuetext="Unavailable"' : `aria-valuenow="${progress}"`}><div class="progress-fill" style="width:${progress ?? 0}%"></div></div>
       <div class="footer-row">
         <span class="deadline ${deadlineClass(g)}">${escapeHtml(when)}</span>
-        <strong class="goal-card-pct">${progress ?? '—'}${progress === null ? '' : '%'}</strong>
+        <span class="goal-card-meta-right">
+          ${status !== 'archived' ? `<span class="todo-sync-pill" title="Synced with Todo">Todo ✓</span>` : ''}
+          <strong class="goal-card-pct">${progress ?? '—'}${progress === null ? '' : '%'}</strong>
+        </span>
       </div>
     </article>
   `;
@@ -606,10 +773,10 @@ function handleWizardSubmit(e) {
 
   if (existing) {
     Object.assign(existing, data);
-    showToast("Goal updated", "success");
+    showToast("Goal updated & synced to Todo", "success");
   } else {
     state.goals.push(data);
-    showToast("Goal created", "success");
+    showToast("Goal created & added to Todo", "success");
   }
   save();
   LifeGoalProgress.load(state.goals,true).then(context=>{habitContext=context;render();}).catch(()=>{habitContext=null;render();});
@@ -850,11 +1017,12 @@ function deleteCurrentGoal() {
   const g = state.goals.find((x) => x.id === state.detailId);
   if (!g) return;
   if (!confirm(`Delete "${g.title}" and all its tasks?`)) return;
+  const deletedGoalId = g.id;
   state.goals = state.goals.filter((x) => x.id !== state.detailId);
-  save();
+  save({ deletedGoalId });
   closeDetail();
   render();
-  showToast("Goal deleted", "success");
+  showToast("Goal & linked Todo deleted", "success");
 }
 
 // ── Toast ────────────────────────────────────────────────────────────────────
@@ -874,6 +1042,11 @@ function setupEventListeners() {
   $("gProgressSource").addEventListener("change", updateProgressFields);
 
   $("newGoalBtn").addEventListener("click", () => openWizard());
+  $("syncTodoBtn")?.addEventListener("click", () => {
+    load();
+    syncGoalsToTodos({ notify: true });
+    render();
+  });
   $('addMeasureBtn').addEventListener('click', () => {
     state.wizard.measures = readWizardMeasures();
     state.wizard.measures.push({id: uid(), metric: '', target: null, unit: '', current: null});
@@ -936,6 +1109,9 @@ function setupEventListeners() {
     if (e.target === $("detailModal")) closeDetail();
   });
   $("bumpProgressBtn").addEventListener("click", bumpProgress);
+  $("openTodoBtn")?.addEventListener("click", () => {
+    if (state.detailId) openGoalInTodo(state.detailId);
+  });
   $("editGoalBtn").addEventListener("click", editCurrentGoal);
   $("deleteGoalBtn").addEventListener("click", deleteCurrentGoal);
   $("addTaskForm").addEventListener("submit", handleAddTask);
@@ -954,13 +1130,38 @@ document.addEventListener("DOMContentLoaded", async () => {
   await window.appStorageReady;
   load();
   try {habitContext=await LifeGoalProgress.load(state.goals,true);} catch(e) {showToast(e.message,'error');}
+  syncGoalsToTodos();
   setupEventListeners();
   async function refreshHabitProgress() {
     if($("wizardModal").open || document.activeElement === $("goalNotes")) return;
-    try {await appStorage.sync(); load(); habitContext=await LifeGoalProgress.load(state.goals,true);} catch(e) {habitContext=null; showToast(e.message,'error');}
-    render(); const g=state.goals.find(g=>g.id===state.detailId); if(g) {renderDetailProgress(g);renderDetailMeta(g);}
+    try {await appStorage.sync(); load(); habitContext=await LifeGoalProgress.load(state.goals,true); syncGoalsToTodos();} catch(e) {habitContext=null; showToast(e.message,'error');}
+    render(); const g=state.goals.find(g=>g.id===state.detailId); if(g) {renderDetailTasks(g);renderDetailProgress(g);renderDetailMeta(g);}
   }
-  window.addEventListener('message',e=>{if(e.origin===location.origin && e.source===parent && e.data?.type==='goals-refresh')refreshHabitProgress();});
+  window.addEventListener("app-storage-change", () => {
+    if (isWritingGoals || $("wizardModal").open || document.activeElement === $("goalNotes")) return;
+    load();
+    render();
+    const g = state.goals.find((goal) => goal.id === state.detailId);
+    if (g && $("detailModal")?.open) {
+      $("detailCategory").textContent = g.category || "Uncategorized";
+      $("detailTitle").textContent = g.title;
+      renderDetailMeta(g);
+      renderSmartSummary(g);
+      renderDetailMeasures(g);
+      renderDetailTasks(g);
+      renderDetailProgress(g);
+    }
+  });
+  window.addEventListener('message',e=>{
+    if(e.origin!==location.origin || e.source!==parent) return;
+    if(e.data?.type==='goals-refresh') refreshHabitProgress();
+    if(e.data?.type==='goals-open-detail' && e.data?.goalId) {
+      load();
+      render();
+      const target = state.goals.find(g => String(g.id) === String(e.data.goalId));
+      if (target) openDetail(target.id);
+    }
+  });
   window.addEventListener('focus',refreshHabitProgress);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshHabitProgress();});
   setInterval(()=>{if(!document.hidden)refreshHabitProgress();},60000);

@@ -26,6 +26,30 @@ addEventListener('message',event=>{
 document.querySelector('nav a[href="#notes"]')?.insertAdjacentHTML('beforebegin','<a href="#notepad"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 2v4m8-4v4M8 10h8m-8 4h8"/></svg> Notepad</a>');
 document.querySelector('nav a[href="#focus"]')?.insertAdjacentHTML('beforebegin','<a href="#growth"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21V11M12 16C3 16 3 6 3 6s9 0 9 10Zm0-5C12 3 21 3 21 3s0 8-9 8Z"/></svg> Growth</a>');
 addEventListener('message',event=>{
+  if(event.origin===location.origin&&event.source===$('goals').contentWindow&&event.data?.type==='goals-open-todo'){
+    const {goalId,todoId}=event.data;
+    if(typeof goalId!=='string')return;
+    const frame=$('todo'),url=new URL(frame.dataset.src,location.href);
+    url.searchParams.set('goal',goalId);
+    if(frame.getAttribute('src')){
+      frame.contentWindow?.postMessage({type:'todo-select-goal',goalId,todoId:todoId||null},location.origin);
+    }else{
+      frame.src=url.href;
+    }
+    location.hash='#todo';return;
+  }
+  if(event.origin===location.origin&&event.source===$('todo').contentWindow&&event.data?.type==='todo-open-goal'){
+    const {goalId}=event.data;
+    if(typeof goalId!=='string')return;
+    const frame=$('goals'),url=new URL(frame.dataset.src,location.href);
+    url.searchParams.set('goal',goalId);
+    if(frame.getAttribute('src')){
+      frame.contentWindow?.postMessage({type:'goals-open-detail',goalId},location.origin);
+    }else{
+      frame.src=url.href;
+    }
+    location.hash='#goals';return;
+  }
   if(event.origin!==location.origin||event.source!==$('growth').contentWindow||event.data?.type!=='growth-open')return;
   const {page,goalId,boardId,cardId}=event.data;
   if(!['goals','kanban','habittify','finance'].includes(page))return;
@@ -69,7 +93,7 @@ function applyTheme(theme){document.documentElement.dataset.theme=theme;try{for(
 let theme='dark';try{theme=appStorage.getItem('edi_os_theme')||appStorage.getItem('edifinance_theme')||theme}catch{}applyTheme(theme);
 $('theme').onclick=()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 for(const id of ['growth','finance','habittify','todo','kanban','calendar','goals','notes','notepad','settings'])$(id).addEventListener('load',()=>{const root=$(id).contentDocument.documentElement;root.dataset.theme=document.documentElement.dataset.theme;new MutationObserver(()=>{if(root.dataset.theme!==document.documentElement.dataset.theme)applyTheme(root.dataset.theme)}).observe(root,{attributes:true,attributeFilter:['data-theme']})});
-function route(){const id=['dashboard','growth','focus','finance','habittify','todo','kanban','calendar','goals','notes','notepad','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'dashboard';for(const key of ['dashboard','growth','focus','finance','habittify','todo','kanban','calendar','goals','notes','notepad','settings']){$(key).hidden=key!==id;if(key===id&&$(key).dataset.src&&!$(key).getAttribute('src'))$(key).src=$(key).dataset.src}document.querySelectorAll('nav a').forEach(a=>a.setAttribute('aria-current',a.hash==='#'+id?'page':'false'));document.title='Edi Life OS · '+(id==='dashboard'?'Overview':id[0].toUpperCase()+id.slice(1));if(id==='dashboard'){appStorage.sync();refreshDashboard()}if(id==='goals')$('goals').contentWindow?.postMessage({type:'goals-refresh'},location.origin);if(id==='finance')$('finance').contentWindow?.postMessage({type:'finance-refresh'},location.origin);if(id==='growth')$('growth').contentWindow?.postMessage({type:'growth-refresh'},location.origin);if(id==='calendar')$('calendar').contentWindow?.postMessage({type:'calendar-refresh'},location.origin)}
+function route(){const id=['dashboard','growth','focus','finance','habittify','todo','kanban','calendar','goals','notes','notepad','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'dashboard';for(const key of ['dashboard','growth','focus','finance','habittify','todo','kanban','calendar','goals','notes','notepad','settings']){$(key).hidden=key!==id;if(key===id&&$(key).dataset.src&&!$(key).getAttribute('src'))$(key).src=$(key).dataset.src}document.querySelectorAll('nav a').forEach(a=>a.setAttribute('aria-current',a.hash==='#'+id?'page':'false'));document.title='Edi Life OS · '+(id==='dashboard'?'Overview':id[0].toUpperCase()+id.slice(1));if(id==='dashboard'){appStorage.sync();refreshDashboard()}if(id==='goals')$('goals').contentWindow?.postMessage({type:'goals-refresh'},location.origin);if(id==='todo')$('todo').contentWindow?.postMessage({type:'todo-refresh'},location.origin);if(id==='finance')$('finance').contentWindow?.postMessage({type:'finance-refresh'},location.origin);if(id==='growth')$('growth').contentWindow?.postMessage({type:'growth-refresh'},location.origin);if(id==='calendar')$('calendar').contentWindow?.postMessage({type:'calendar-refresh'},location.origin)}
 addEventListener('hashchange',route);route();
 function render(){const seconds=remainingSeconds(data,Date.now());const label=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');$('clock').textContent=label;$('navTimer').textContent=data.deadline?label:'';$('start').textContent=data.deadline?'Pause':data.mode==='focus'?'Start focus':'Start break';$('cycle').textContent=`Session ${data.round%4+1} of 4`;document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===data.mode)));const today=data.history.filter(h=>h.day===day());$('completed').textContent=today.length;$('minutes').textContent=today.reduce((n,h)=>n+h.minutes,0);}
 function setMode(mode){data.mode=mode;data.deadline=null;data.remaining=data.lengths[mode]*60;save();render()}

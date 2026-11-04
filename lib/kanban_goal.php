@@ -12,13 +12,17 @@ function kanban_card_to_goal(StateStore $store, PDO $db, array $body): array
     foreach (['board_id', 'column_id', 'card_id'] as $field) $body[$field] = api_text($body[$field] ?? '', $field, 100, true);
     $revisions = $body['revisions'] ?? null;
     if (!is_array($revisions)) throw new ApiException(422, 'validation_error', 'Saved revisions are required.');
-    foreach (['kanban_boards_v1', GOALS_KEY] as $key) {
+    foreach (['kanban_boards_v1', GOALS_KEY, TODOS_KEY] as $key) {
+        if ($key === TODOS_KEY && !array_key_exists(TODOS_KEY, $revisions)) continue;
         $revision = $revisions[$key] ?? null;
         if ($revision !== null && (!is_string($revision) || !preg_match('/^[a-f0-9]{64}$/D', $revision))) throw new ApiException(422, 'validation_error', 'Invalid saved revision.');
     }
     if (!isset($revisions['kanban_boards_v1'])) throw new ApiException(422, 'validation_error', 'A saved project revision is required.');
 
     $defaults = ['kanban_boards_v1' => ['boards' => []], GOALS_KEY => ['goals' => []]];
+    if (array_key_exists(TODOS_KEY, $revisions)) {
+        $defaults[TODOS_KEY] = goals_default_todos_doc();
+    }
     $goal = $store->mutate($defaults, function (array &$documents) use ($body, $db): array {
         $card = $boardName = $columnName = null;
         $labels = [];
@@ -77,8 +81,18 @@ function kanban_card_to_goal(StateStore $store, PDO $db, array $body): array
             'tasks' => $items,
         ], [], true);
         $documents[GOALS_KEY]['goals'][] = $goal;
+        if (isset($documents[TODOS_KEY])) {
+            goals_sync_todos($documents[GOALS_KEY]['goals'], $documents[TODOS_KEY], null, $db);
+        }
         return $goal;
     }, $revisions + [GOALS_KEY => null]);
+
+    if (!array_key_exists(TODOS_KEY, $revisions)) {
+        $store->mutate([TODOS_KEY => goals_default_todos_doc()], function (array &$docs) use ($store, $db): void {
+            $goals = $store->get(GOALS_KEY, ['goals' => []])['goals'];
+            goals_sync_todos($goals, $docs[TODOS_KEY], null, $db);
+        });
+    }
 
     $updates = [];
     foreach (array_keys($defaults) as $key) {

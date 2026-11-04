@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/lib/api_response.php';
 require_once __DIR__ . '/lib/state_store.php';
+require_once __DIR__ . '/lib/goals.php';
 life_os_require_auth();
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -31,6 +32,29 @@ try {
         foreach ($rows as $row) {
             $data[$row['state_key']] = $row['state_value'];
             $revisions[$row['state_key']] = hash('sha256', $row['state_value']);
+        }
+        if (isset($data[GOALS_KEY])) {
+            try {
+                $goalsDoc = json_decode((string) $data[GOALS_KEY], true, 64, JSON_THROW_ON_ERROR);
+                $todosDoc = isset($data[TODOS_KEY])
+                    ? json_decode((string) $data[TODOS_KEY], true, 64, JSON_THROW_ON_ERROR)
+                    : goals_default_todos_doc();
+                if (is_array($goalsDoc['goals'] ?? null) && is_array($todosDoc)) {
+                    if (goals_sync_todos($goalsDoc['goals'], $todosDoc, null, $db)) {
+                        $store = new StateStore($db);
+                        $store->mutate([TODOS_KEY => goals_default_todos_doc()], function (array &$docs) use ($goalsDoc, $db): void {
+                            goals_sync_todos($goalsDoc['goals'], $docs[TODOS_KEY], null, $db);
+                        });
+                        $updatedRaw = $store->raw(TODOS_KEY);
+                        if ($updatedRaw !== null) {
+                            $data[TODOS_KEY] = $updatedRaw;
+                            $revisions[TODOS_KEY] = hash('sha256', $updatedRaw);
+                        }
+                    }
+                }
+            } catch (Throwable) {
+                // Ignore malformed state and return stored documents as-is.
+            }
         }
         life_os_start_session();
         $_SESSION['state_csrf'] ??= bin2hex(random_bytes(32));

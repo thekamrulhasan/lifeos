@@ -5,6 +5,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 2) . '/lib/state_store.php';
 require_once dirname(__DIR__, 2) . '/lib/http_cache.php';
+require_once dirname(__DIR__, 2) . '/lib/goals.php';
 
 final class LibraryTest extends TestCase
 {
@@ -68,5 +69,43 @@ final class LibraryTest extends TestCase
         } finally {
             putenv('LIFEOS_TIMEZONE'); putenv('LIFEOS_WEATHER_LATITUDE'); putenv('LIFEOS_WEATHER_LONGITUDE');
         }
+    }
+
+    public function testGoalsSyncTodosCreatesUpdatesAndRemovesLinkedTodos(): void
+    {
+        $todosDoc = goals_default_todos_doc();
+        $goals = [
+            [
+                'id' => 'goal-1',
+                'title' => 'Learn Rust',
+                'specific' => 'Complete the Rust book',
+                'relevant' => 'Systems programming',
+                'notes' => 'Chapter 1-10',
+                'category' => 'Career',
+                'priority' => 'high',
+                'deadline' => '2026-12-31',
+                'status' => 'active',
+                'progressSource' => 'checklist',
+                'tasks' => [
+                    ['id' => 'sub-1', 'title' => 'Read ch 1', 'done' => true],
+                    ['id' => 'sub-2', 'title' => 'Read ch 2', 'done' => false],
+                ],
+            ],
+        ];
+        self::assertTrue(goals_sync_todos($goals, $todosDoc));
+        self::assertCount(1, $todosDoc['tasks']);
+        self::assertSame('goal-1', $todosDoc['tasks'][0]['goalId']);
+        self::assertSame('Learn Rust', $todosDoc['tasks'][0]['title']);
+        self::assertFalse($todosDoc['tasks'][0]['done']);
+        self::assertCount(2, $todosDoc['tasks'][0]['subtasks']);
+
+        // Completing all goal tasks marks the linked Todo done.
+        $goals[0]['tasks'][1]['done'] = true;
+        self::assertTrue(goals_sync_todos($goals, $todosDoc));
+        self::assertTrue($todosDoc['tasks'][0]['done']);
+
+        // Deleting the goal removes the linked Todo.
+        self::assertTrue(goals_sync_todos([], $todosDoc, 'goal-1'));
+        self::assertCount(0, $todosDoc['tasks']);
     }
 }

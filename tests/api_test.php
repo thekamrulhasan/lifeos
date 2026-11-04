@@ -61,14 +61,18 @@ check(strlen($goal['id']) === 36 && strlen($goal['tasks'][0]['id']) === 36, 'goa
 check($goal['metric'] === 'Score' && $goal['target'] === 8, 'legacy measure mirror');
 check(count(request('GET', 'goals')) === 1, 'goals list');
 $goalId = $goal['id'];
+$syncedTodos = $store->get(TODOS_KEY, ['tasks' => []])['tasks'];
+check(count($syncedTodos) === 1 && $syncedTodos[0]['goalId'] === $goalId && $syncedTodos[0]['title'] === 'Studio' && $syncedTodos[0]['due'] === '2027-01-07' && count($syncedTodos[0]['subtasks']) === 1, 'creating a SMART goal automatically creates a linked Todo item');
 $store->mutate([GOALS_KEY => []], function (array &$docs) { $docs[GOALS_KEY]['unknown'] = true; $docs[GOALS_KEY]['goals'][0]['unknown'] = 'keep'; $docs[GOALS_KEY]['goals'][0]['tasks'][0]['unknown'] = 42; });
 $updated = request('PATCH', 'goals/' . $goalId, ['title' => 'Home studio']);
 check($updated['unknown'] === 'keep' && $updated['tasks'][0]['unknown'] === 42, 'goal patch preserves unknown fields');
+check($store->get(TODOS_KEY, ['tasks' => []])['tasks'][0]['title'] === 'Home studio', 'goal patch updates linked Todo item');
 check($store->get(GOALS_KEY, [])['unknown'] === true, 'document metadata preserved');
 request('PATCH', 'goals/' . $goalId, ['tasks' => [['id' => $goal['tasks'][0]['id'], 'title' => 'Repair walls now']]]);
 check(request('GET', 'goals/' . $goalId)['tasks'][0]['unknown'] === 42, 'nested patch preserves unknown fields');
 $task = request('POST', 'tasks', ['source' => 'goal', 'goal_id' => $goalId, 'title' => 'Buy panels']);
 check($task['due_date'] === '2027-01-07', 'goal task inherits deadline');
+check(count($store->get(TODOS_KEY, ['tasks' => []])['tasks'][0]['subtasks']) === 2, 'adding goal task updates linked Todo subtasks');
 check(request('POST', 'tasks/' . $task['id'] . '/complete')['done'], 'goal task completion');
 check(request('PATCH', 'tasks/' . $task['id'], ['done' => false, 'priority' => 'high'])['priority'] === 'high', 'task update');
 seed(KANBAN_KEY, ['activeBoardId' => 'board', 'unknown' => 42, 'boards' => [['id' => 'board', 'columns' => [['id' => 'todo', 'name' => 'To Do', 'cards' => []], ['id' => 'done', 'name' => ' Completed ', 'cards' => []]]], ['id' => 'no-done', 'columns' => [['id' => 'open', 'name' => 'Open', 'cards' => []]]]]]);
@@ -117,6 +121,7 @@ check($store->get(NOTES_KEY, [])['connections'] === [], 'note connections remove
 check(request('GET', 'dashboard')['recent_notes'] === [], 'dashboard secret notes excluded');
 check(request('DELETE', 'tasks/' . $task['id'])['deleted'], 'task delete');
 check(request('DELETE', 'goals/' . $goalId)['deleted'], 'goal delete');
+check($store->get(TODOS_KEY, ['tasks' => []])['tasks'] === [], 'deleting goal removes linked Todo item');
 fails(fn () => request('GET', 'goals/' . $goalId), 404, 'deleted goal missing');
 fails(fn () => request('PUT', 'goals'), 405, 'method not allowed');
 fails(fn () => request('GET', 'credentials'), 404, 'no credential route');
