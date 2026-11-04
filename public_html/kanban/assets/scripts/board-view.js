@@ -210,12 +210,20 @@ function createCardElement(board, column, card, cardIndex, showProject = false) 
   const dueClass = dueDate && column.name.toLowerCase() !== 'done' ? (dueDate < today ? 'overdue' : dueDate === today ? 'due-today' : '') : '';
 
   // Card content with inline edit support
+  const goalActionHtml = card.goalId
+    ? `<button type="button" data-action="open-goal">Open in Goals ↗</button>`
+    : `<button type="button" data-action="goal">Move to goal</button>`;
+  const goalPillHtml = card.goalId
+    ? `<div class="card-goal-row"><span class="card-goal-pill" title="Synced with SMART Goal">🎯 SMART Goal${card.goalCategory ? ' · ' + escapeHtml(card.goalCategory) : ''}</span></div>`
+    : '';
+
   cardEl.innerHTML = `
     <div class="card-header">
       <span class="priority-dot ${priorityClass}" role="img" aria-label="${priority} priority" title="${priority} priority"></span>
       <h3 class="card-title" contenteditable="false">${escapeHtml(card.title)}</h3>
-      <details class="card-menu"><summary aria-label="Card actions" title="Card actions">⋯</summary><div class="card-actions-menu"><button type="button" data-action="edit">Edit card</button><button type="button" data-action="move">Move to another project</button><button type="button" data-action="goal">Move to goal</button><button type="button" data-action="delete" class="menu-danger">Delete card</button></div></details>
+      <details class="card-menu"><summary aria-label="Card actions" title="Card actions">⋯</summary><div class="card-actions-menu"><button type="button" data-action="edit">Edit card</button><button type="button" data-action="move">Move to another project</button>${goalActionHtml}<button type="button" data-action="delete" class="menu-danger">Delete card</button></div></details>
     </div>
+    ${goalPillHtml}
     ${showProject ? `<span class="card-project" title="Project">${escapeHtml(board.name)}</span>` : ''}
     ${card.description ? `<p class="card-desc">${escapeHtml(card.description)}</p>` : ''}
     ${labelsHtml ? `<div class="card-meta"><div class="card-labels">${labelsHtml}</div></div>` : ''}
@@ -233,9 +241,13 @@ function createCardElement(board, column, card, cardIndex, showProject = false) 
     cardEl.querySelector('.card-menu').open = false;
     openMoveCard({boardId: board.id, columnId: column.id, cardId: card.id, fromEditor: false});
   });
-  cardEl.querySelector('[data-action="goal"]').addEventListener('click', () => {
+  cardEl.querySelector('[data-action="goal"]')?.addEventListener('click', () => {
     cardEl.querySelector('.card-menu').open = false;
     openGoalCard({boardId: board.id, columnId: column.id, cardId: card.id, fromEditor: false});
+  });
+  cardEl.querySelector('[data-action="open-goal"]')?.addEventListener('click', () => {
+    cardEl.querySelector('.card-menu').open = false;
+    openGoalFromKanban(card.goalId);
   });
   cardEl.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
     e.stopPropagation();

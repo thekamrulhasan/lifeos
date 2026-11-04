@@ -1435,3 +1435,71 @@ button:focus-visible, summary:focus-visible, .background-choice:has(input:focus-
 /* All-projects view */
 .all-projects-tab { padding-right: 3px; }
 .card-project { display: inline-block; max-width: 100%; margin: 6px 0 2px; padding: 2px 7px; overflow: hidden; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); text-overflow: ellipsis; white-space: nowrap; }
+
+/* SMART Goal ↔ Kanban Integration */
+.board-sync-goals-btn {
+  border: 1px solid rgba(57, 230, 173, 0.35);
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+  padding: 8px 12px;
+}
+.board-sync-goals-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+.card-goal-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.card-goal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(57, 230, 173, 0.28);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kanban-goal-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(57, 230, 173, 0.1);
+  border: 1px solid rgba(57, 230, 173, 0.3);
+}
+.kanban-goal-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.kanban-goal-cat {
+  font-size: 12px;
+  color: var(--editor-muted);
+  margin-right: auto;
+}
+.kanban-open-goal-btn {
+  padding: 5px 10px !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  color: var(--accent) !important;
+  border-color: rgba(57, 230, 173, 0.4) !important;
+}
+.kanban-open-goal-btn:hover {
+  background: rgba(57, 230, 173, 0.18) !important;
+}

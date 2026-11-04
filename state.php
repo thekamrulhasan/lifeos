@@ -52,6 +52,22 @@ try {
                         }
                     }
                 }
+                $kanbanDoc = isset($data[KANBAN_KEY])
+                    ? json_decode((string) $data[KANBAN_KEY], true, 64, JSON_THROW_ON_ERROR)
+                    : goals_default_kanban_doc();
+                if (is_array($goalsDoc['goals'] ?? null) && is_array($kanbanDoc)) {
+                    if (goals_sync_kanban($goalsDoc['goals'], $kanbanDoc, null, $db)) {
+                        $store ??= new StateStore($db);
+                        $store->mutate([KANBAN_KEY => goals_default_kanban_doc()], function (array &$docs) use ($goalsDoc, $db): void {
+                            goals_sync_kanban($goalsDoc['goals'], $docs[KANBAN_KEY], null, $db);
+                        });
+                        $updatedKanbanRaw = $store->raw(KANBAN_KEY);
+                        if ($updatedKanbanRaw !== null) {
+                            $data[KANBAN_KEY] = $updatedKanbanRaw;
+                            $revisions[KANBAN_KEY] = hash('sha256', $updatedKanbanRaw);
+                        }
+                    }
+                }
             } catch (Throwable) {
                 // Ignore malformed state and return stored documents as-is.
             }

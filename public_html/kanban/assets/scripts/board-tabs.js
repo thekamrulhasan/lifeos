@@ -69,6 +69,15 @@ function renderBoardTabs() {
   addTab.textContent = '+ New board';
   addTab.addEventListener('click', () => openBoardModal());
   container.appendChild(addTab);
+
+  // Sync SMART Goals button
+  const syncGoalsBtn = document.createElement('button');
+  syncGoalsBtn.type = 'button';
+  syncGoalsBtn.className = 'board-add-tab board-sync-goals-btn';
+  syncGoalsBtn.title = 'Sync all SMART Goals into Kanban';
+  syncGoalsBtn.textContent = '⇄ Sync Goals';
+  syncGoalsBtn.addEventListener('click', () => syncKanbanFromGoals({ notify: true }));
+  container.appendChild(syncGoalsBtn);
 }
 
 function startBoardRename(tabNameEl, boardId) {

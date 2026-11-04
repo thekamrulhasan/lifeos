@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <script src="/assets/storage.js?v=goal-todo-sync-1"></script>
+  <script src="/assets/storage.js?v=goal-kanban-sync-1"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="SMART goals — define goals, break them into tasks, and track progress.">
@@ -17,7 +17,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="assets/styles/style.css?v=goal-todo-sync-1">
+  <link rel="stylesheet" href="assets/styles/style.css?v=goal-kanban-sync-1">
 <script src="/assets/html-escape.js?v=issue19-1"></script>
 </head>
 <body>
@@ -40,7 +40,7 @@
           <option value="completed">Completed</option>
           <option value="archived">Archived</option>
         </select>
-        <button type="button" class="btn-ghost" id="syncTodoBtn" title="Fetch all existing goals and sync with Todo">⇄ Sync Todo</button>
+        <button type="button" class="btn-ghost" id="syncTodoBtn" title="Fetch all existing goals and sync with Todo &amp; Kanban">⇄ Sync Todo &amp; Kanban</button>
         <button class="btn-primary" id="newGoalBtn">＋ New goal</button>
       </div>
     </header>
@@ -171,6 +171,7 @@
       <div class="progress-actions">
         <button type="button" class="btn-ghost" id="bumpProgressBtn">＋ Update progress</button>
         <button type="button" class="btn-ghost" id="openTodoBtn" title="View and manage this goal's Todo item">Open in Todo ↗</button>
+        <button type="button" class="btn-ghost" id="openKanbanBtn" title="View and manage this goal's Kanban card">Open in Kanban ↗</button>
         <button type="button" class="btn-ghost" id="editGoalBtn">Edit SMART</button>
         <button type="button" class="btn-ghost btn-danger" id="deleteGoalBtn">Delete</button>
       </div>
@@ -197,6 +198,6 @@
 
   <div class="toast" id="toast"></div>
   <script src="/assets/goal-progress.js?v=issue19-1" defer></script>
-  <script src="assets/scripts/app.js?v=goal-todo-sync-1" defer></script>
+  <script src="assets/scripts/app.js?v=goal-kanban-sync-1" defer></script>
 </body>
 </html>

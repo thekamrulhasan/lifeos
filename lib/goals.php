@@ -6,6 +6,9 @@ require_once __DIR__ . '/user_context.php';
 
 const GOALS_KEY = 'edi_goals_v1';
 const TODOS_KEY = 'edi_todos_v1';
+if (!defined('KANBAN_KEY')) {
+    define('KANBAN_KEY', 'kanban_boards_v1');
+}
 
 function goals_default_todos_doc(): array
 {
@@ -170,6 +173,290 @@ function goals_sync_todos(array $goals, array &$todosDoc, ?string $deletedGoalId
     return $changed;
 }
 
+function goals_default_kanban_doc(): array
+{
+    $boardId = 'board-default';
+    return [
+        'boards' => [
+            [
+                'id' => $boardId,
+                'name' => 'My Projects',
+                'labelDefs' => [],
+                'columns' => [
+                    ['id' => 'col-backlog', 'name' => 'Backlog', 'cards' => []],
+                    ['id' => 'col-todo', 'name' => 'To Do', 'cards' => []],
+                    ['id' => 'col-in-progress', 'name' => 'In Progress', 'cards' => []],
+                    ['id' => 'col-review', 'name' => 'To Review', 'cards' => []],
+                    ['id' => 'col-done', 'name' => 'Done', 'cards' => []],
+                ],
+                'createdAt' => (int) round(microtime(true) * 1000),
+            ],
+        ],
+        'activeBoardId' => $boardId,
+        'allProjects' => false,
+    ];
+}
+
+function goals_kanban_column_stage(array $goal, ?PDO $db = null): string
+{
+    if (goals_status($goal, $db) === 'completed') return 'done';
+    $prog = goals_progress($goal, $db);
+    $pct = $prog['percent'] ?? 0;
+    $anyTaskDone = count(array_filter($goal['tasks'] ?? [], fn ($t) => is_array($t) && !empty($t['done']))) > 0;
+    return ($pct > 0 || $anyTaskDone) ? 'in_progress' : 'todo';
+}
+
+function goals_find_kanban_column_index(array $columns, string $stage): int
+{
+    $doneNames = ['done', 'completed', 'complete'];
+    $progressNames = ['in progress', 'doing', 'in-progress'];
+    $todoNames = ['to do', 'todo', 'open'];
+
+    if ($stage === 'done') {
+        foreach ($columns as $idx => $col) {
+            if (in_array(mb_strtolower(trim((string) ($col['name'] ?? ''))), $doneNames, true)) return $idx;
+        }
+        return max(0, count($columns) - 1);
+    }
+    if ($stage === 'in_progress') {
+        foreach ($columns as $idx => $col) {
+            if (in_array(mb_strtolower(trim((string) ($col['name'] ?? ''))), $progressNames, true)) return $idx;
+        }
+    }
+    foreach ($columns as $idx => $col) {
+        if (in_array(mb_strtolower(trim((string) ($col['name'] ?? ''))), $todoNames, true)) return $idx;
+    }
+    foreach ($columns as $idx => $col) {
+        if (!in_array(mb_strtolower(trim((string) ($col['name'] ?? ''))), $doneNames, true)) return $idx;
+    }
+    return 0;
+}
+
+function goals_ensure_kanban_label(array &$board, string $name, string $color, callable $uuid): string
+{
+    if (!isset($board['labelDefs']) || !is_array($board['labelDefs'])) {
+        $board['labelDefs'] = [];
+    }
+    foreach ($board['labelDefs'] as $label) {
+        if (is_array($label) && mb_strtolower(trim((string) ($label['name'] ?? ''))) === mb_strtolower(trim($name))) {
+            return (string) $label['id'];
+        }
+    }
+    $id = $uuid();
+    $board['labelDefs'][] = ['id' => $id, 'name' => trim($name), 'color' => $color];
+    return $id;
+}
+
+function goals_sync_kanban(array $goals, array &$kanbanDoc, ?string $deletedGoalId = null, ?PDO $db = null): bool
+{
+    $changed = false;
+    $defaults = goals_default_kanban_doc();
+    if (!isset($kanbanDoc['boards']) || !is_array($kanbanDoc['boards']) || count($kanbanDoc['boards']) === 0) {
+        $kanbanDoc['boards'] = $defaults['boards'];
+        $kanbanDoc['activeBoardId'] ??= $defaults['activeBoardId'];
+        $changed = true;
+    }
+    if (!array_key_exists('activeBoardId', $kanbanDoc) || !$kanbanDoc['activeBoardId']) {
+        $kanbanDoc['activeBoardId'] = $kanbanDoc['boards'][0]['id'] ?? $defaults['activeBoardId'];
+        $changed = true;
+    }
+
+    $archivedIds = [];
+    foreach ($goals as $g) {
+        if (is_array($g) && ($g['status'] ?? '') === 'archived' && isset($g['id'])) {
+            $archivedIds[(string) $g['id']] = true;
+        }
+    }
+    if ($deletedGoalId !== null) {
+        $archivedIds[$deletedGoalId] = true;
+    }
+
+    if ($archivedIds) {
+        foreach ($kanbanDoc['boards'] as &$board) {
+            if (!isset($board['columns']) || !is_array($board['columns'])) continue;
+            foreach ($board['columns'] as &$column) {
+                if (!isset($column['cards']) || !is_array($column['cards'])) continue;
+                $before = count($column['cards']);
+                $column['cards'] = array_values(array_filter(
+                    $column['cards'],
+                    fn ($c) => !is_array($c) || !isset($c['goalId']) || !isset($archivedIds[(string) $c['goalId']])
+                ));
+                if (count($column['cards']) !== $before) {
+                    $changed = true;
+                }
+            }
+            unset($column);
+        }
+        unset($board);
+    }
+
+    $uuid = fn (): string => function_exists('api_uuid')
+        ? api_uuid()
+        : sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+            random_int(0, 0xffff), random_int(0, 0xffff),
+            random_int(0, 0xffff),
+            random_int(0, 0x0fff) | 0x4000,
+            random_int(0, 0x3fff) | 0x8000,
+            random_int(0, 0xffff), random_int(0, 0xffff), random_int(0, 0xffff)
+        );
+
+    $doneNames = ['done', 'completed', 'complete'];
+    $progressNames = ['in progress', 'doing', 'in-progress'];
+    $todoNames = ['to do', 'todo', 'open', 'backlog'];
+
+    foreach ($goals as $goal) {
+        if (!is_array($goal) || ($goal['status'] ?? '') === 'archived') continue;
+        $goalId = trim((string) ($goal['id'] ?? ''));
+        if ($goalId === '') continue;
+
+        $stage = goals_kanban_column_stage($goal, $db);
+        $isDone = ($stage === 'done');
+        $title = mb_substr(trim((string) ($goal['title'] ?? '')) ?: 'Untitled goal', 0, 120);
+        $description = mb_substr(goals_build_todo_notes($goal), 0, 2000);
+        $priority = in_array($goal['priority'] ?? '', ['high', 'medium', 'low'], true) ? $goal['priority'] : 'medium';
+        $dueDate = (!empty($goal['deadline']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $goal['deadline'])) ? (string) $goal['deadline'] : '';
+        $startDate = (!empty($goal['startDate']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $goal['startDate'])) ? (string) $goal['startDate'] : '';
+        $category = trim((string) ($goal['category'] ?? ''));
+        $progressSource = (string) ($goal['progressSource'] ?? 'checklist');
+
+        $checklist = [];
+        foreach ($goal['tasks'] ?? [] as $t) {
+            if (!is_array($t)) continue;
+            $itemText = mb_substr(trim((string) ($t['title'] ?? '')), 0, 120);
+            if ($itemText === '') continue;
+            $checklist[] = [
+                'id' => (string) ($t['id'] ?? $uuid()),
+                'text' => $itemText,
+                'done' => !empty($t['done']),
+            ];
+        }
+
+        $foundBoardIdx = null;
+        $foundColIdx = null;
+        $foundCardIdx = null;
+        foreach ($kanbanDoc['boards'] as $bIdx => $b) {
+            foreach ($b['columns'] ?? [] as $cIdx => $col) {
+                foreach ($col['cards'] ?? [] as $kIdx => $card) {
+                    if (is_array($card) && (string) ($card['goalId'] ?? '') === $goalId) {
+                        $foundBoardIdx = $bIdx;
+                        $foundColIdx = $cIdx;
+                        $foundCardIdx = $kIdx;
+                        break 3;
+                    }
+                }
+            }
+        }
+
+        if ($foundBoardIdx === null) {
+            $targetBoardIdx = 0;
+            foreach ($kanbanDoc['boards'] as $bIdx => $b) {
+                if (($b['id'] ?? '') === ($kanbanDoc['activeBoardId'] ?? '')) {
+                    $targetBoardIdx = $bIdx;
+                    break;
+                }
+            }
+            $board =& $kanbanDoc['boards'][$targetBoardIdx];
+            if (empty($board['columns']) || !is_array($board['columns'])) {
+                $board['columns'] = $defaults['boards'][0]['columns'];
+                $changed = true;
+            }
+            $smartLabelId = goals_ensure_kanban_label($board, 'SMART Goal', '#10b981', $uuid);
+            $labelIds = [$smartLabelId];
+            if ($category !== '') {
+                $catLabelId = goals_ensure_kanban_label($board, mb_substr($category, 0, 30), '#3b82f6', $uuid);
+                if (!in_array($catLabelId, $labelIds, true)) $labelIds[] = $catLabelId;
+            }
+            $targetColIdx = goals_find_kanban_column_index($board['columns'], $stage);
+            $checklists = $checklist ? [['id' => 'goal-chk-' . $goalId, 'title' => 'Goal Tasks', 'items' => $checklist]] : [];
+            array_unshift($board['columns'][$targetColIdx]['cards'], [
+                'id' => $uuid(),
+                'goalId' => $goalId,
+                'goalCategory' => $category,
+                'goalProgressSource' => $progressSource,
+                'title' => $title,
+                'description' => $description,
+                'priority' => $priority,
+                'dueDate' => $dueDate,
+                'startDate' => $startDate,
+                'completed' => $isDone,
+                'labelIds' => $labelIds,
+                'checklist' => $checklist,
+                'checklists' => $checklists,
+                'createdAt' => (int) round(microtime(true) * 1000),
+                'updatedAt' => (int) round(microtime(true) * 1000),
+            ]);
+            unset($board);
+            $changed = true;
+        } else {
+            $board =& $kanbanDoc['boards'][$foundBoardIdx];
+            $cur = $board['columns'][$foundColIdx]['cards'][$foundCardIdx];
+            $smartLabelId = goals_ensure_kanban_label($board, 'SMART Goal', '#10b981', $uuid);
+            $labelIds = is_array($cur['labelIds'] ?? null) ? array_values($cur['labelIds']) : [];
+            if (!in_array($smartLabelId, $labelIds, true)) $labelIds[] = $smartLabelId;
+            if ($category !== '') {
+                $catLabelId = goals_ensure_kanban_label($board, mb_substr($category, 0, 30), '#3b82f6', $uuid);
+                if (!in_array($catLabelId, $labelIds, true)) $labelIds[] = $catLabelId;
+            }
+
+            $chkId = $cur['checklists'][0]['id'] ?? ('goal-chk-' . $goalId);
+            $checklists = $checklist ? [['id' => $chkId, 'title' => $cur['checklists'][0]['title'] ?? 'Goal Tasks', 'items' => $checklist]] : [];
+
+            $curColName = mb_strtolower(trim((string) ($board['columns'][$foundColIdx]['name'] ?? '')));
+            $targetColIdx = $foundColIdx;
+            if ($stage === 'done' && !in_array($curColName, $doneNames, true)) {
+                $targetColIdx = goals_find_kanban_column_index($board['columns'], 'done');
+            } elseif ($stage === 'in_progress' && (in_array($curColName, $todoNames, true) || in_array($curColName, $doneNames, true))) {
+                $targetColIdx = goals_find_kanban_column_index($board['columns'], 'in_progress');
+            } elseif ($stage === 'todo' && (in_array($curColName, $doneNames, true) || in_array($curColName, $progressNames, true))) {
+                $targetColIdx = goals_find_kanban_column_index($board['columns'], 'todo');
+            }
+
+            $needsUpdate = (
+                $targetColIdx !== $foundColIdx ||
+                ($cur['title'] ?? '') !== $title ||
+                ($cur['description'] ?? '') !== $description ||
+                ($cur['priority'] ?? 'medium') !== $priority ||
+                ($cur['dueDate'] ?? '') !== $dueDate ||
+                ($cur['startDate'] ?? '') !== $startDate ||
+                (bool) ($cur['completed'] ?? false) !== $isDone ||
+                ($cur['goalCategory'] ?? '') !== $category ||
+                ($cur['goalProgressSource'] ?? 'checklist') !== $progressSource ||
+                ($cur['labelIds'] ?? []) !== $labelIds ||
+                ($cur['checklist'] ?? []) !== $checklist
+            );
+
+            if ($needsUpdate) {
+                $updatedCard = array_merge($cur, [
+                    'goalId' => $goalId,
+                    'goalCategory' => $category,
+                    'goalProgressSource' => $progressSource,
+                    'title' => $title,
+                    'description' => $description,
+                    'priority' => $priority,
+                    'dueDate' => $dueDate,
+                    'startDate' => $startDate,
+                    'completed' => $isDone,
+                    'labelIds' => $labelIds,
+                    'checklist' => $checklist,
+                    'checklists' => $checklists,
+                    'updatedAt' => (int) round(microtime(true) * 1000),
+                ]);
+                if ($targetColIdx !== $foundColIdx) {
+                    array_splice($board['columns'][$foundColIdx]['cards'], $foundCardIdx, 1);
+                    array_unshift($board['columns'][$targetColIdx]['cards'], $updatedCard);
+                } else {
+                    $board['columns'][$foundColIdx]['cards'][$foundCardIdx] = $updatedCard;
+                }
+                $changed = true;
+            }
+            unset($board);
+        }
+    }
+
+    return $changed;
+}
+
 function goals_progress(array $goal, ?PDO $db = null): ?array
 {
     $source = $goal['progressSource'] ?? 'checklist';
@@ -278,12 +565,13 @@ function goals_api(StateStore $store, string $method, ?string $id, array $body, 
         $query->execute([$body['habitProgress']['habitId']]);
         if ($query->fetchColumn() === false) throw new ApiException(422, 'validation_error', 'Linked habit does not exist.');
     }
-    return $store->mutate([GOALS_KEY => ['goals' => []], TODOS_KEY => goals_default_todos_doc()], function (array &$docs) use ($method, $id, $body, $db) {
+    return $store->mutate([GOALS_KEY => ['goals' => []], TODOS_KEY => goals_default_todos_doc(), KANBAN_KEY => goals_default_kanban_doc()], function (array &$docs) use ($method, $id, $body, $db) {
         $goals =& $docs[GOALS_KEY]['goals'];
         if ($method === 'POST') {
             $goal = goals_validate($body, [], true);
             $goals[] = $goal;
             goals_sync_todos($goals, $docs[TODOS_KEY], null, $db);
+            goals_sync_kanban($goals, $docs[KANBAN_KEY], null, $db);
             return $goal;
         }
         foreach ($goals as $index => &$goal) {
@@ -291,10 +579,12 @@ function goals_api(StateStore $store, string $method, ?string $id, array $body, 
             if ($method === 'DELETE') {
                 array_splice($goals, $index, 1);
                 goals_sync_todos($goals, $docs[TODOS_KEY], $id, $db);
+                goals_sync_kanban($goals, $docs[KANBAN_KEY], $id, $db);
                 return ['deleted' => true];
             }
             $goal = goals_validate($body, $goal);
             goals_sync_todos($goals, $docs[TODOS_KEY], null, $db);
+            goals_sync_kanban($goals, $docs[KANBAN_KEY], null, $db);
             return $goal;
         }
         throw new ApiException(404, 'not_found', 'Goal not found.');

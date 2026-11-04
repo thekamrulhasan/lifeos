@@ -116,12 +116,17 @@
 - **Multi-Board & Column Management (`kanban_boards_v1`):**
   - Multiple project boards with custom backgrounds, board descriptions, custom color labels (`labelDefs`), and draggable columns/lists.
   - **All Projects View (`all-projects-view.js`):** Merges columns with matching names across all boards side-by-side and supports dragging a card between columns within its own project.
+- **Automatic SMART Goal ↔ Kanban Two-Way Synchronization:**
+  - Every non-archived SMART goal in `edi_goals_v1` automatically creates and maintains a linked Kanban card (`goalId`, `goalCategory`, `goalProgressSource`, `title`, `description`, `priority`, `dueDate`, `startDate`, `completed`, `SMART Goal` and category labels, and `checklist`/`checklists` mapped 1-to-1 from goal tasks).
+  - Automatic stage-based column placement: **To Do** (0% / no tasks completed), **In Progress** (in-progress metric or partial tasks completed), and **Done** (100% / completed).
+  - Dragging a Goal-linked card between `To Do`, `In Progress`, and `Done` columns, or toggling its checklist items or editing its details in `#kanban`, automatically syncs changes back to the linked SMART Goal in `edi_goals_v1` and linked Todo in `edi_todos_v1`.
+  - Includes a **⇄ Sync Goals** button in the Kanban board tabs bar, `🎯 SMART Goal` card pills, and a SMART Goal banner with an **Open in Goals ↗** deep-link button inside the Kanban Card Modal.
 - **Rich Cards:**
   - Drag-and-drop reordering across columns, priorities (`low`, `medium`, `high`), multiple labels, start and due dates with due times, reminder intervals (5m, 1h, 1d before), descriptions, multiple named checklists with item progress, and timestamped comments.
   - **Voice Dictation (`public_html/assets/voice-input.js`):** Web Speech API dictation button in card description/comment textareas.
 - **Cross-Project Card Move & Convert to Goal (`kanban.php`, `lib/kanban_goal.php`):**
   - Atomically move a card to another board/column, automatically matching or creating label definitions and updating `card_attachments` board associations.
-  - **Move to Goal (`action: "to_goal"`):** Converts a Kanban card into a checklist-driven SMART Goal in `edi_goals_v1` (transferring title, description, priority, dates, labels, and checklist items) and removes the card from the board in one transaction.
+  - **Move to Goal (`action: "to_goal"`):** Converts a standalone Kanban card into a checklist-driven SMART Goal in `edi_goals_v1` (transferring title, description, priority, dates, labels, and checklist items) and removes the source card from the board in one transaction.
 - **Private File Attachments (`attachments.php`):**
   - Upload (up to 8 MB / PHP INI limit), download, and delete files per Kanban card.
   - Stored outside the web root in `.lifeos-files-<hash>` (or `/data/attachments` volume in Docker) with metadata in `card_attachments`.
@@ -136,8 +141,8 @@
 - **SMART Goal Wizard & Management (`edi_goals_v1`, `edi_goals_drafts_v1`):**
   - Title, category, priority (`low`, `medium`, `high`), start date, deadline, SMART fields (`specific`, `achievable`, `relevant`, `timeBound`), notes, and draft saving.
   - Voice input support for textareas.
-  - **Automatic Todo Creation & Sync:** Creating, updating, or deleting a SMART goal (via `#goals`, `/api/v1/goals`, `/api/v1/tasks`, or Kanban "Move to goal") automatically creates, updates, or deletes the corresponding Todo item and subtasks in `edi_todos_v1`.
-  - Includes a `Todo ✓` sync badge on goal cards, a **⇄ Sync Todo** header action, and an **Open in Todo ↗** button inside the Goal Detail modal for instant cross-app navigation.
+  - **Automatic Todo & Kanban Creation & Sync:** Creating, updating, or deleting a SMART goal (via `#goals`, `/api/v1/goals`, `/api/v1/tasks`) automatically creates, updates, moves, or deletes the corresponding Todo item in `edi_todos_v1` and the corresponding Kanban card in `kanban_boards_v1`.
+  - Includes a `Todo · Kanban ✓` sync badge on goal cards, a **⇄ Sync Todo & Kanban** header action, and **Open in Todo ↗** + **Open in Kanban ↗** buttons inside the Goal Detail modal for instant cross-app navigation.
 - **Three Progress Sources (`progressSource`):**
   1. **Checklist (`tasks`):** Inline-editable, sortable, and filterable checklist items with optional due dates.
   2. **Success Measures (`measure`):** Numeric metrics with `metric`, `target`, `current`, and `unit` (averages capped current/target ratios).

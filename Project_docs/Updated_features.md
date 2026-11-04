@@ -36,6 +36,12 @@
   - Updated `public_html/assets/storage.js` `BroadcastChannel` messages to propagate SHA-256 revisions across same-origin workspace iframes so cross-app state updates never trigger `409 Conflict`.
   - Added a dedicated **SMART Goals** view, `🎯 SMART Goal` task chips, and an **Open in Goals ↗** detail banner in `#todo`, plus `Todo ✓` card badges and **Open in Todo ↗** in `#goals`.
 
+- **SMART Goal ↔ Kanban Automatic Sync & Deep-Linking (`lib/goals.php`, `lib/tasks.php`, `state.php`, `migrate.php`, `public_html/goals/`, `public_html/kanban/`, `public_html/assets/os.js`):**
+  - Automatically creates, updates, and places a linked Kanban card in `kanban_boards_v1` (`To Do`, `In Progress`, or `Done` column based on progress) whenever a SMART Goal is created or edited in `#goals`, `/api/v1/goals`, or `/api/v1/tasks`.
+  - Automatically fetches existing SMART goals from `edi_goals_v1` and syncs/backfills all Kanban cards on `GET /state.php`, via `migrate.php`, on `#goals` and `#kanban` startup, and via manual **⇄ Sync Todo & Kanban** / **⇄ Sync Goals** buttons.
+  - Added two-way synchronization so dragging a Goal-linked Kanban card between columns (`To Do`, `In Progress`, `Done`), toggling its checklist items, or editing its title, priority, or dates in `#kanban` automatically updates the linked SMART Goal in `edi_goals_v1` and linked Todo in `edi_todos_v1`.
+  - Added `🎯 SMART Goal` badges on Kanban cards, a SMART Goal banner with **Open in Goals ↗** inside the Kanban Card Modal, `Todo · Kanban ✓` badges on Goal cards, and an **Open in Kanban ↗** button inside the Goal Detail modal.
+
 ---
 
 ## 3. Feature Update Log
@@ -46,4 +52,6 @@
 | 2026-11-04 | `lib/goals.php`, `lib/tasks.php`, `lib/kanban_goal.php`, `state.php` | Updated | Added `goals_sync_todos()` to automatically create/update/remove linked Todo items in `edi_todos_v1` and backfill existing goals on `GET /state.php`. |
 | 2026-11-04 | `public_html/assets/storage.js`, `public_html/assets/os.js`, `public_html/index.html` | Updated | Propagated SHA-256 revisions over `BroadcastChannel` and added cross-frame deep-linking between `#goals` and `#todo`. |
 | 2026-11-04 | `public_html/goals/*`, `public_html/todo/*` | Updated | Added automatic Goal → Todo creation, existing Goal fetch & sync, two-way subtask/completion sync, `SMART Goals` Todo view, badges, and cross-navigation buttons. |
+| 2026-11-04 | `lib/goals.php`, `lib/tasks.php`, `state.php`, `migrate.php` | Updated | Added `goals_sync_kanban()` to automatically create/update/move/remove linked Kanban cards in `kanban_boards_v1` and backfill existing goals in DB and `GET /state.php`. |
+| 2026-11-04 | `public_html/goals/*`, `public_html/kanban/*`, `public_html/assets/os.js` | Updated | Added automatic SMART Goal ↔ Kanban two-way sync (column drag, checklists, card modal edits), `🎯 SMART Goal` card badges, `Open in Kanban ↗` / `Open in Goals ↗` deep-linking, and `⇄ Sync Goals` button. |
 

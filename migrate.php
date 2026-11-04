@@ -12,8 +12,9 @@ try {
         $store = new StateStore($db);
         $goals = $store->get(GOALS_KEY, ['goals' => []])['goals'] ?? [];
         if (is_array($goals) && $goals) {
-            $store->mutate([TODOS_KEY => goals_default_todos_doc()], function (array &$docs) use ($goals, $db): void {
+            $store->mutate([TODOS_KEY => goals_default_todos_doc(), KANBAN_KEY => goals_default_kanban_doc()], function (array &$docs) use ($goals, $db): void {
                 goals_sync_todos($goals, $docs[TODOS_KEY], null, $db);
+                goals_sync_kanban($goals, $docs[KANBAN_KEY], null, $db);
             });
         }
     }

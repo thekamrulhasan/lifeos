@@ -4,6 +4,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 const KEY = "edi_goals_v1";
 const TODOS_KEY = "edi_todos_v1";
+const KANBAN_KEY = "kanban_boards_v1";
 const DRAFTS_KEY = "edi_goals_drafts_v1";
 const DEFAULT_TODO_LISTS = [
   { id: "work", name: "Work", color: "#38bdf8" },
@@ -66,6 +67,7 @@ function save({ deletedGoalId = null } = {}) {
     isWritingGoals = true;
     appStorage.setItem(KEY, JSON.stringify({...JSON.parse(appStorage.getItem(KEY) || "{}"), goals: state.goals }));
     syncGoalsToTodos({ deletedGoalId });
+    syncGoalsToKanban({ deletedGoalId });
   } catch (e) {
     console.error("Failed to save goals:", e);
     showToast("Unable to save goals", "error");
@@ -223,6 +225,300 @@ function openGoalInTodo(goalId) {
     );
   } else {
     location.href = `/todo/?goal=${encodeURIComponent(goalId)}`;
+  }
+}
+
+function defaultKanbanDoc() {
+  const boardId = uid();
+  return {
+    boards: [
+      {
+        id: boardId,
+        name: "My Projects",
+        labelDefs: [],
+        columns: [
+          { id: uid(), name: "Backlog", cards: [] },
+          { id: uid(), name: "To Do", cards: [] },
+          { id: uid(), name: "In Progress", cards: [] },
+          { id: uid(), name: "To Review", cards: [] },
+          { id: uid(), name: "Done", cards: [] },
+        ],
+        createdAt: Date.now(),
+      },
+    ],
+    activeBoardId: boardId,
+    allProjects: false,
+  };
+}
+
+function goalKanbanStage(goal) {
+  if (effectiveStatus(goal) === "completed") return "done";
+  const pct = calcProgress(goal) ?? 0;
+  const anyTaskDone = (Array.isArray(goal.tasks) ? goal.tasks : []).some((t) => Boolean(t?.done));
+  return pct > 0 || anyTaskDone ? "in_progress" : "todo";
+}
+
+function findKanbanColumnIndex(columns, stage) {
+  const doneNames = ["done", "completed", "complete"];
+  const progressNames = ["in progress", "doing", "in-progress"];
+  const todoNames = ["to do", "todo", "open"];
+  const norm = (name) => String(name || "").trim().toLowerCase();
+
+  if (stage === "done") {
+    const idx = columns.findIndex((c) => doneNames.includes(norm(c.name)));
+    return idx !== -1 ? idx : Math.max(0, columns.length - 1);
+  }
+  if (stage === "in_progress") {
+    const idx = columns.findIndex((c) => progressNames.includes(norm(c.name)));
+    if (idx !== -1) return idx;
+  }
+  const todoIdx = columns.findIndex((c) => todoNames.includes(norm(c.name)));
+  if (todoIdx !== -1) return todoIdx;
+  const nonDoneIdx = columns.findIndex((c) => !doneNames.includes(norm(c.name)));
+  return nonDoneIdx !== -1 ? nonDoneIdx : 0;
+}
+
+function ensureKanbanLabel(board, name, color) {
+  if (!Array.isArray(board.labelDefs)) board.labelDefs = [];
+  const norm = String(name || "").trim().toLowerCase();
+  let def = board.labelDefs.find((l) => String(l?.name || "").trim().toLowerCase() === norm);
+  if (!def) {
+    def = { id: uid(), name: String(name).trim(), color };
+    board.labelDefs.push(def);
+  }
+  return def.id;
+}
+
+function syncGoalsToKanban({ deletedGoalId = null, notify = false } = {}) {
+  try {
+    let kanbanDoc = null;
+    const rawKanban = appStorage.getItem(KANBAN_KEY);
+    if (rawKanban) {
+      const parsed = JSON.parse(rawKanban);
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.boards) && parsed.boards.length) {
+        kanbanDoc = parsed;
+      }
+    }
+    let changed = false;
+    if (!kanbanDoc) {
+      kanbanDoc = defaultKanbanDoc();
+      changed = true;
+    }
+
+    const archivedIds = new Set(
+      state.goals.filter((g) => g.status === "archived" && g.id).map((g) => String(g.id))
+    );
+    if (deletedGoalId) archivedIds.add(String(deletedGoalId));
+
+    if (archivedIds.size > 0) {
+      for (const board of kanbanDoc.boards) {
+        for (const col of board.columns || []) {
+          if (!Array.isArray(col.cards)) continue;
+          const before = col.cards.length;
+          col.cards = col.cards.filter((c) => !c?.goalId || !archivedIds.has(String(c.goalId)));
+          if (col.cards.length !== before) changed = true;
+        }
+      }
+    }
+
+    const doneNames = ["done", "completed", "complete"];
+    const progressNames = ["in progress", "doing", "in-progress"];
+    const todoNames = ["to do", "todo", "open", "backlog"];
+    const norm = (name) => String(name || "").trim().toLowerCase();
+    let syncedCount = 0;
+
+    for (const goal of state.goals) {
+      if (!goal || goal.status === "archived" || !goal.id) continue;
+      syncedCount++;
+      const goalId = String(goal.id);
+      const stage = goalKanbanStage(goal);
+      const isDone = stage === "done";
+      const title = String(goal.title || "Untitled goal").trim().slice(0, 120) || "Untitled goal";
+      const description = buildTodoNotes(goal).slice(0, 2000);
+      const priority = ["high", "medium", "low"].includes(goal.priority) ? goal.priority : "medium";
+      const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(goal.deadline || "") ? goal.deadline : "";
+      const startDate = /^\d{4}-\d{2}-\d{2}$/.test(goal.startDate || "") ? goal.startDate : "";
+      const goalCategory = String(goal.category || "").trim();
+      const goalProgressSource = String(goal.progressSource || "checklist");
+      const checklist = (Array.isArray(goal.tasks) ? goal.tasks : [])
+        .filter((t) => t && String(t.title || "").trim())
+        .map((t) => ({
+          id: String(t.id || uid()),
+          text: String(t.title).trim().slice(0, 120),
+          done: Boolean(t.done),
+        }));
+
+      let foundBoard = null;
+      let foundColIdx = -1;
+      let foundCardIdx = -1;
+      for (const board of kanbanDoc.boards) {
+        for (let cIdx = 0; cIdx < (board.columns || []).length; cIdx++) {
+          const cards = board.columns[cIdx].cards || [];
+          const kIdx = cards.findIndex((c) => c && String(c.goalId || "") === goalId);
+          if (kIdx !== -1) {
+            foundBoard = board;
+            foundColIdx = cIdx;
+            foundCardIdx = kIdx;
+            break;
+          }
+        }
+        if (foundBoard) break;
+      }
+
+      if (!foundBoard) {
+        const board =
+          kanbanDoc.boards.find((b) => b.id === kanbanDoc.activeBoardId) || kanbanDoc.boards[0];
+        if (!Array.isArray(board.columns) || !board.columns.length) {
+          board.columns = defaultKanbanDoc().boards[0].columns;
+        }
+        const smartLabelId = ensureKanbanLabel(board, "SMART Goal", "#10b981");
+        const labelIds = [smartLabelId];
+        if (goalCategory) {
+          const catLabelId = ensureKanbanLabel(board, goalCategory.slice(0, 30), "#3b82f6");
+          if (!labelIds.includes(catLabelId)) labelIds.push(catLabelId);
+        }
+        const targetColIdx = findKanbanColumnIndex(board.columns, stage);
+        const checklists = checklist.length
+          ? [{ id: `goal-chk-${goalId}`, title: "Goal Tasks", items: checklist }]
+          : [];
+        board.columns[targetColIdx].cards.unshift({
+          id: uid(),
+          goalId,
+          goalCategory,
+          goalProgressSource,
+          title,
+          description,
+          priority,
+          dueDate,
+          startDate,
+          completed: isDone,
+          labelIds,
+          checklist,
+          checklists,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        changed = true;
+      } else {
+        const cur = foundBoard.columns[foundColIdx].cards[foundCardIdx];
+        const smartLabelId = ensureKanbanLabel(foundBoard, "SMART Goal", "#10b981");
+        const labelIds = Array.isArray(cur.labelIds) ? [...cur.labelIds] : [];
+        if (!labelIds.includes(smartLabelId)) labelIds.push(smartLabelId);
+        if (goalCategory) {
+          const catLabelId = ensureKanbanLabel(foundBoard, goalCategory.slice(0, 30), "#3b82f6");
+          if (!labelIds.includes(catLabelId)) labelIds.push(catLabelId);
+        }
+
+        const chkId = cur.checklists?.[0]?.id || `goal-chk-${goalId}`;
+        const checklists = checklist.length
+          ? [{ id: chkId, title: cur.checklists?.[0]?.title || "Goal Tasks", items: checklist }]
+          : [];
+
+        const curColName = norm(foundBoard.columns[foundColIdx]?.name);
+        let targetColIdx = foundColIdx;
+        if (stage === "done" && !doneNames.includes(curColName)) {
+          targetColIdx = findKanbanColumnIndex(foundBoard.columns, "done");
+        } else if (
+          stage === "in_progress" &&
+          (todoNames.includes(curColName) || doneNames.includes(curColName))
+        ) {
+          targetColIdx = findKanbanColumnIndex(foundBoard.columns, "in_progress");
+        } else if (
+          stage === "todo" &&
+          (doneNames.includes(curColName) || progressNames.includes(curColName))
+        ) {
+          targetColIdx = findKanbanColumnIndex(foundBoard.columns, "todo");
+        }
+
+        const prevChk = JSON.stringify(
+          (Array.isArray(cur.checklist) ? cur.checklist : []).map((i) => ({
+            id: String(i.id),
+            text: String(i.text),
+            done: Boolean(i.done),
+          }))
+        );
+        const nextChk = JSON.stringify(checklist);
+        if (
+          targetColIdx !== foundColIdx ||
+          cur.title !== title ||
+          (cur.description || "") !== description ||
+          (cur.priority || "medium") !== priority ||
+          (cur.dueDate || "") !== dueDate ||
+          (cur.startDate || "") !== startDate ||
+          Boolean(cur.completed) !== isDone ||
+          (cur.goalCategory || "") !== goalCategory ||
+          (cur.goalProgressSource || "checklist") !== goalProgressSource ||
+          JSON.stringify(cur.labelIds || []) !== JSON.stringify(labelIds) ||
+          prevChk !== nextChk
+        ) {
+          const updatedCard = {
+            ...cur,
+            goalId,
+            goalCategory,
+            goalProgressSource,
+            title,
+            description,
+            priority,
+            dueDate,
+            startDate,
+            completed: isDone,
+            labelIds,
+            checklist,
+            checklists,
+            updatedAt: Date.now(),
+          };
+          if (targetColIdx !== foundColIdx) {
+            foundBoard.columns[foundColIdx].cards.splice(foundCardIdx, 1);
+            foundBoard.columns[targetColIdx].cards.unshift(updatedCard);
+          } else {
+            foundBoard.columns[foundColIdx].cards[foundCardIdx] = updatedCard;
+          }
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      appStorage.setItem(KANBAN_KEY, JSON.stringify(kanbanDoc));
+    }
+    if (notify) {
+      showToast(`Synced ${syncedCount} SMART goal${syncedCount === 1 ? "" : "s"} with Todo & Kanban`, "success");
+    }
+    return kanbanDoc;
+  } catch (e) {
+    console.error("Failed to sync goals with Kanban:", e);
+    if (notify) showToast("Unable to sync with Kanban", "error");
+    return null;
+  }
+}
+
+function openGoalInKanban(goalId) {
+  if (!goalId) return;
+  const kanbanDoc = syncGoalsToKanban() || {};
+  let boardId = null;
+  let cardId = null;
+  for (const board of kanbanDoc.boards || []) {
+    for (const col of board.columns || []) {
+      const card = (col.cards || []).find((c) => c && String(c.goalId || "") === String(goalId));
+      if (card) {
+        boardId = board.id;
+        cardId = card.id;
+        break;
+      }
+    }
+    if (cardId) break;
+  }
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      { type: "goals-open-kanban", goalId: String(goalId), boardId, cardId },
+      location.origin
+    );
+  } else {
+    const params = new URLSearchParams();
+    if (boardId) params.set("board", boardId);
+    if (cardId) params.set("card", cardId);
+    params.set("goal", String(goalId));
+    location.href = `/kanban/?${params.toString()}`;
   }
 }
 
@@ -453,7 +749,7 @@ function goalCardHTML(g, index = 0) {
       <div class="footer-row">
         <span class="deadline ${deadlineClass(g)}">${escapeHtml(when)}</span>
         <span class="goal-card-meta-right">
-          ${status !== 'archived' ? `<span class="todo-sync-pill" title="Synced with Todo">Todo ✓</span>` : ''}
+          ${status !== 'archived' ? `<span class="todo-sync-pill" title="Synced with Todo &amp; Kanban">Todo · Kanban ✓</span>` : ''}
           <strong class="goal-card-pct">${progress ?? '—'}${progress === null ? '' : '%'}</strong>
         </span>
       </div>
@@ -773,10 +1069,10 @@ function handleWizardSubmit(e) {
 
   if (existing) {
     Object.assign(existing, data);
-    showToast("Goal updated & synced to Todo", "success");
+    showToast("Goal updated & synced to Todo & Kanban", "success");
   } else {
     state.goals.push(data);
-    showToast("Goal created & added to Todo", "success");
+    showToast("Goal created & synced to Todo & Kanban", "success");
   }
   save();
   LifeGoalProgress.load(state.goals,true).then(context=>{habitContext=context;render();}).catch(()=>{habitContext=null;render();});
@@ -1044,7 +1340,8 @@ function setupEventListeners() {
   $("newGoalBtn").addEventListener("click", () => openWizard());
   $("syncTodoBtn")?.addEventListener("click", () => {
     load();
-    syncGoalsToTodos({ notify: true });
+    syncGoalsToTodos({ notify: false });
+    syncGoalsToKanban({ notify: true });
     render();
   });
   $('addMeasureBtn').addEventListener('click', () => {
@@ -1112,6 +1409,9 @@ function setupEventListeners() {
   $("openTodoBtn")?.addEventListener("click", () => {
     if (state.detailId) openGoalInTodo(state.detailId);
   });
+  $("openKanbanBtn")?.addEventListener("click", () => {
+    if (state.detailId) openGoalInKanban(state.detailId);
+  });
   $("editGoalBtn").addEventListener("click", editCurrentGoal);
   $("deleteGoalBtn").addEventListener("click", deleteCurrentGoal);
   $("addTaskForm").addEventListener("submit", handleAddTask);
@@ -1131,10 +1431,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   load();
   try {habitContext=await LifeGoalProgress.load(state.goals,true);} catch(e) {showToast(e.message,'error');}
   syncGoalsToTodos();
+  syncGoalsToKanban();
   setupEventListeners();
   async function refreshHabitProgress() {
     if($("wizardModal").open || document.activeElement === $("goalNotes")) return;
-    try {await appStorage.sync(); load(); habitContext=await LifeGoalProgress.load(state.goals,true); syncGoalsToTodos();} catch(e) {habitContext=null; showToast(e.message,'error');}
+    try {await appStorage.sync(); load(); habitContext=await LifeGoalProgress.load(state.goals,true); syncGoalsToTodos(); syncGoalsToKanban();} catch(e) {habitContext=null; showToast(e.message,'error');}
     render(); const g=state.goals.find(g=>g.id===state.detailId); if(g) {renderDetailTasks(g);renderDetailProgress(g);renderDetailMeta(g);}
   }
   window.addEventListener("app-storage-change", () => {

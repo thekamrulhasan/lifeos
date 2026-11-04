@@ -174,6 +174,9 @@ function persistCardChecklists() {
   card.checklists = serializeDraftChecklists();
   card.checklist = card.checklists.flatMap(list => list.items);
   card.updatedAt = Date.now();
+  if (card.goalId) {
+    syncKanbanCardToGoal(card, getColumn(state.cardModal.boardId, state.cardModal.columnId), { fromChecklist: true });
+  }
   saveState(); renderBoardContent();
 }
 
@@ -391,6 +394,9 @@ function openCardModal({ boardId, columnId, cardId }) {
   $('cardColumnId').value = columnId;
   $('cardId').value = cardId;
   $('cardModalTitle').textContent = 'Edit card';
+  if ($('cardGoalBanner')) $('cardGoalBanner').hidden = !card.goalId;
+  if ($('cardGoalCategory')) $('cardGoalCategory').textContent = card.goalCategory ? `· ${card.goalCategory}` : '';
+  if ($('goalCardBtn')) $('goalCardBtn').hidden = !!card.goalId;
   $('cardTitle').value = card.title || '';
   $('cardDescription').value = card.description || '';
   $('cardPriority').value = card.priority || 'medium';
@@ -505,7 +511,8 @@ function handleCardFormSubmit(e) {
   card.customFields = state.draftCustomFields.filter(field => field.name.trim()).map(field => ({...field, name: field.name.trim(), value: field.value.trim()}));
   card.attachmentUrl = attachmentUrl;
   const destination = board.columns.find(list => list.id === $('cardList').value);
-  if (destination && destination.id !== columnId) {
+  const movedColumn = Boolean(destination && destination.id !== columnId);
+  if (movedColumn) {
     column.cards = column.cards.filter(item => item.id !== cardId);
     destination.cards.push(card);
   }
@@ -520,6 +527,10 @@ function handleCardFormSubmit(e) {
       card.dueDate = cardDateString(next);
       card.completed = false;
     }
+  }
+
+  if (card.goalId) {
+    syncKanbanCardToGoal(card, destination || column, { fromColumnMove: movedColumn });
   }
 
   saveState();

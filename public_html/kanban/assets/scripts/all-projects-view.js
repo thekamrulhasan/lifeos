@@ -75,6 +75,10 @@ function handleAllProjectsDrop(e, cardId) {
   if (insertAt === -1) toCol.cards.push(moved);
   else toCol.cards.splice(insertAt, 0, moved);
 
+  if (moved.goalId && fromCol.id !== toCol.id) {
+    syncKanbanCardToGoal(moved, toCol, { fromColumnMove: true });
+  }
+
   saveState();
   render();
   showToast('Card moved', 'success');

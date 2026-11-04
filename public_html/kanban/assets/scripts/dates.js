@@ -104,6 +104,9 @@ function saveCardDates(remove) {
   card.reminderShown = '';
   $('cardDueDate').value = dueDate;
   updateCardDateSummary(card);
+  if (card.goalId) {
+    syncKanbanCardToGoal(card, getColumn(state.cardModal.boardId, state.cardModal.columnId));
+  }
   saveState(); renderBoardContent(); closeCardDates();
   showToast(remove ? 'Dates removed' : 'Dates saved', 'success');
 }

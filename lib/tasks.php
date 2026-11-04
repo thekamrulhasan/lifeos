@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-const KANBAN_KEY = 'kanban_boards_v1';
+if (!defined('KANBAN_KEY')) {
+    define('KANBAN_KEY', 'kanban_boards_v1');
+}
 
 function tasks_done_column(array $column): bool
 {
@@ -69,6 +71,7 @@ function tasks_api(StateStore $store, string $method, ?string $id, bool $complet
                     if (isset($body['priority'])) $new['priority'] = $body['priority'];
                     $goal['tasks'][] = $new; $goal['updatedAt'] = api_now();
                     goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
+                    goals_sync_kanban($docs[GOALS_KEY]['goals'], $docs[KANBAN_KEY]);
                     return ['id' => $new['id'], 'source' => 'goal', 'goal_id' => $goal['id'], 'title' => $new['title'], 'done' => $new['done'], 'due_date' => $new['dueDate'] ?? $goal['deadline'] ?? null, 'priority' => $new['priority'] ?? $goal['priority'] ?? 'medium'];
                 }
                 throw new ApiException(404, 'not_found', 'Goal not found.');
@@ -97,10 +100,12 @@ function tasks_api(StateStore $store, string $method, ?string $id, bool $complet
                     if ($method === 'DELETE') {
                         array_splice($goal['tasks'], $index, 1);
                         goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
+                        goals_sync_kanban($docs[GOALS_KEY]['goals'], $docs[KANBAN_KEY]);
                         return ['deleted' => true];
                     }
                     foreach ($body as $field => $value) $task[$field === 'due_date' ? 'dueDate' : $field] = $value;
                     goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
+                    goals_sync_kanban($docs[GOALS_KEY]['goals'], $docs[KANBAN_KEY]);
                     break;
                 }
                 break;
@@ -130,6 +135,33 @@ function tasks_api(StateStore $store, string $method, ?string $id, bool $complet
                 $card['updatedAt'] = api_now();
                 if ($to !== $from) { array_splice($board['columns'][$from]['cards'], $cardIndex, 1); $board['columns'][$to]['cards'][] = $card; }
                 else $board['columns'][$from]['cards'][$cardIndex] = $card;
+                if (!empty($card['goalId'])) {
+                    foreach ($docs[GOALS_KEY]['goals'] as &$g) {
+                        if ((string) ($g['id'] ?? '') === (string) $card['goalId']) {
+                            $g['title'] = mb_substr((string) ($card['title'] ?? $g['title']), 0, 200);
+                            if (array_key_exists('dueDate', $card)) $g['deadline'] = ($card['dueDate'] ?: null);
+                            if (in_array($card['priority'] ?? '', ['low', 'medium', 'high'], true)) $g['priority'] = $card['priority'];
+                            if (($g['progressSource'] ?? 'checklist') === 'checklist' && ($to !== $from || isset($body['done']))) {
+                                $isDoneCol = tasks_done_column($board['columns'][$to]);
+                                if ($isDoneCol) {
+                                    if (!empty($g['tasks'])) {
+                                        foreach ($g['tasks'] as &$gt) $gt['done'] = true;
+                                        unset($gt);
+                                    } else {
+                                        $g['tasks'] = [['id' => api_uuid(), 'title' => $g['title'], 'done' => true]];
+                                    }
+                                } elseif ($from !== null && tasks_done_column($board['columns'][$from])) {
+                                    foreach ($g['tasks'] as &$gt) $gt['done'] = false;
+                                    unset($gt);
+                                }
+                            }
+                            $g['updatedAt'] = api_now();
+                            goals_sync_todos($docs[GOALS_KEY]['goals'], $docs[TODOS_KEY]);
+                            break;
+                        }
+                    }
+                    unset($g);
+                }
                 break;
             }
         }

@@ -108,4 +108,51 @@ final class LibraryTest extends TestCase
         self::assertTrue(goals_sync_todos([], $todosDoc, 'goal-1'));
         self::assertCount(0, $todosDoc['tasks']);
     }
+
+    public function testGoalsSyncKanbanCreatesMovesAndRemovesLinkedCards(): void
+    {
+        $kanbanDoc = goals_default_kanban_doc();
+        $goals = [
+            [
+                'id' => 'goal-k1',
+                'title' => 'Launch Product',
+                'specific' => 'Release v1.0',
+                'relevant' => 'Revenue milestone',
+                'notes' => 'Prepare marketing',
+                'category' => 'Career',
+                'priority' => 'high',
+                'deadline' => '2026-12-31',
+                'status' => 'active',
+                'progressSource' => 'checklist',
+                'tasks' => [
+                    ['id' => 't-1', 'title' => 'Build MVP', 'done' => false],
+                    ['id' => 't-2', 'title' => 'Ship landing page', 'done' => false],
+                ],
+            ],
+        ];
+
+        // 0 tasks done -> To Do (column index 1)
+        self::assertTrue(goals_sync_kanban($goals, $kanbanDoc));
+        self::assertCount(1, $kanbanDoc['boards'][0]['columns'][1]['cards']);
+        self::assertSame('goal-k1', $kanbanDoc['boards'][0]['columns'][1]['cards'][0]['goalId']);
+        self::assertFalse($kanbanDoc['boards'][0]['columns'][1]['cards'][0]['completed']);
+
+        // 1 of 2 tasks done -> In Progress (column index 2)
+        $goals[0]['tasks'][0]['done'] = true;
+        self::assertTrue(goals_sync_kanban($goals, $kanbanDoc));
+        self::assertCount(0, $kanbanDoc['boards'][0]['columns'][1]['cards']);
+        self::assertCount(1, $kanbanDoc['boards'][0]['columns'][2]['cards']);
+        self::assertFalse($kanbanDoc['boards'][0]['columns'][2]['cards'][0]['completed']);
+
+        // 2 of 2 tasks done -> Done (column index 4)
+        $goals[0]['tasks'][1]['done'] = true;
+        self::assertTrue(goals_sync_kanban($goals, $kanbanDoc));
+        self::assertCount(0, $kanbanDoc['boards'][0]['columns'][2]['cards']);
+        self::assertCount(1, $kanbanDoc['boards'][0]['columns'][4]['cards']);
+        self::assertTrue($kanbanDoc['boards'][0]['columns'][4]['cards'][0]['completed']);
+
+        // Deleting goal removes linked Kanban card
+        self::assertTrue(goals_sync_kanban([], $kanbanDoc, 'goal-k1'));
+        self::assertCount(0, $kanbanDoc['boards'][0]['columns'][4]['cards']);
+    }
 }
